@@ -1,0 +1,6 @@
+{
+  "name": "Awaaz",
+  "description": "A civic accountability platform for India that connects citizens, communities, and authorities to report and verify issue resolution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
