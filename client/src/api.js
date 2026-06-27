@@ -2,6 +2,7 @@
  * API client for Awaaz.
  * All frontend API calls live here only.
  */
+import { auth } from "./firebase";
 
 const BASE_URL = "/api";
 
@@ -16,6 +17,16 @@ async function apiRequest(endpoint, options = {}) {
     "Content-Type": "application/json",
     ...options.headers,
   };
+
+  // Automatically inject Bearer token if user is signed in
+  if (auth && auth.currentUser && !headers["Authorization"]) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      headers["Authorization"] = `Bearer ${token}`;
+    } catch (err) {
+      console.error("Error getting auth token for API request:", err);
+    }
+  }
 
   try {
     const response = await fetch(url, {
@@ -45,4 +56,57 @@ export async function getRisingIssues(limit = 20, cursor = "") {
     query += `&cursor=${cursor}`;
   }
   return apiRequest(`/feed/rising${query}`);
+}
+
+/**
+ * Public: Get groups matching search and/or type filters.
+ * Matches GET /api/groups
+ */
+export async function getGroups(params = {}) {
+  const queryParts = [];
+  if (params.search) {
+    queryParts.push(`search=${encodeURIComponent(params.search)}`);
+  }
+  if (params.type) {
+    queryParts.push(`type=${encodeURIComponent(params.type)}`);
+  }
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  return apiRequest(`/groups${queryString}`);
+}
+
+/**
+ * Protected: Create a new community group.
+ * Matches POST /api/groups
+ */
+export async function createGroup(body) {
+  return apiRequest("/groups", {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Public: Get complete group information by group ID.
+ * Matches GET /api/groups/:id
+ */
+export async function getGroup(id) {
+  return apiRequest(`/groups/${id}`);
+}
+
+/**
+ * Protected: Join a community group.
+ * Matches POST /api/groups/:id/join
+ */
+export async function joinGroup(id) {
+  return apiRequest(`/groups/${id}/join`, {
+    method: "POST"
+  });
+}
+
+/**
+ * Protected: Get current user's role in a group.
+ * Matches GET /api/groups/:id/my-role
+ */
+export async function getMyRole(groupId) {
+  return apiRequest(`/groups/${groupId}/my-role`);
 }
