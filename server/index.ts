@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import path from "path";
 import cors from "cors";
@@ -6,6 +9,7 @@ import feedRouter from "./routes/feed";
 import authRouter from "./routes/auth";
 import groupsRouter from "./routes/groups";
 import issuesRouter from "./routes/issues";
+import { analyzeCivicIssue } from "./agents/ingestionAgent";
 
 async function startServer() {
   const app = express();
@@ -25,6 +29,24 @@ async function startServer() {
   // API Health Check
   app.get("/api/health", (req, res) => {
     res.json({ success: true, data: { status: "Awaaz API is healthy" } });
+  });
+
+  // Debug AI Ingestion Route (Dev-Only/Testing)
+  app.post("/api/debug/ingestion", async (req, res) => {
+    try {
+      const { imageUrl, description } = req.body;
+      
+      if (!description || !description.trim()) {
+        res.status(400).json({ success: false, error: "Description is required." });
+        return;
+      }
+
+      const result = await analyzeCivicIssue({ imageUrl, description });
+      res.status(200).json({ success: true, data: result });
+    } catch (error: any) {
+      console.error("Debug Ingestion endpoint failed:", error);
+      res.status(500).json({ success: false, error: error.message || "Internal Server Error" });
+    }
   });
 
   // Mount API Routes
