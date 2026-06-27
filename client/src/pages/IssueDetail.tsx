@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { getIssue } from "../api";
+import { getIssue, endorseIssue } from "../api";
+import { COMMUNITY_VERIFICATION_THRESHOLD } from "../../../server/config/constants";
 import { 
   MapPin, 
   Flame, 
@@ -32,6 +33,95 @@ export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetai
   const [error, setError] = useState<string | null>(null);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
+  const [localToast, setLocalToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [endorsingPending, setEndorsingPending] = useState(false);
+
+  useEffect(() => {
+    if (localToast) {
+      const timer = setTimeout(() => {
+        setLocalToast(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [localToast]);
+
+  const handleEndorseClick = async () => {
+    if (endorsingPending || !issue) return;
+
+    // Save previous state for rollback
+    const prevEndorsed = !!issue.endorsed;
+    const prevCount = issue.endorsementCount || 0;
+    const prevPriority = issue.priorityScore || 50;
+    const prevStatus = issue.status || "reported";
+
+    // Compute optimistic state
+    const nextEndorsed = !prevEndorsed;
+    const nextCount = nextEndorsed ? prevCount + 1 : Math.max(0, prevCount - 1);
+    
+    // Optimistic priority score change: each endorsement adds 5 points to priority score
+    const priorityDiff = (nextEndorsed ? 1 : -1) * 5;
+    const nextPriority = Math.min(100, Math.max(1, prevPriority + priorityDiff));
+
+    // Optimistic status transition
+    let nextStatus = prevStatus;
+    if (prevCount < COMMUNITY_VERIFICATION_THRESHOLD && nextCount >= COMMUNITY_VERIFICATION_THRESHOLD && prevStatus === "reported") {
+      nextStatus = "verified";
+    }
+
+    // Set optimistic state immediately
+    setIssue((prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        endorsed: nextEndorsed,
+        endorsementCount: nextCount,
+        priorityScore: nextPriority,
+        status: nextStatus
+      };
+    });
+
+    setEndorsingPending(true);
+    setLocalToast(null);
+
+    try {
+      const res = await endorseIssue(issue.id);
+      if (res && res.success) {
+        setLocalToast({
+          message: res.endorsed 
+            ? "Your citizen signature was registered! Urgency score raised."
+            : "Your endorsement signature was withdrawn.",
+          type: "success"
+        });
+
+        // Background fetch of the authoritative issue state to ensure perfect sync
+        const freshRes = await getIssue(issue.id);
+        if (freshRes && freshRes.success && freshRes.data && freshRes.data.issue) {
+          setIssue(freshRes.data.issue);
+        }
+      } else {
+        throw new Error(res?.error || "Ledger rejected endorsement signature.");
+      }
+    } catch (err: any) {
+      console.error("Endorsement failed:", err);
+      // Rollback to previous state
+      setIssue((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          endorsed: prevEndorsed,
+          endorsementCount: prevCount,
+          priorityScore: prevPriority,
+          status: prevStatus
+        };
+      });
+      setLocalToast({
+        message: err.message || "Failed to update endorsement. Please try again.",
+        type: "error"
+      });
+    } finally {
+      setEndorsingPending(false);
+    }
+  };
 
   useEffect(() => {
     async function loadIssue() {
@@ -296,21 +386,51 @@ export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetai
             </div>
           </div>
 
-          {/* PLACEHOLDER SECTION 2: Timeline Events */}
-          <div className="border border-dashed border-[#E5E0D8] bg-[#FAF9F6]/40 rounded-2xl p-6 relative">
-            <div className="absolute top-4 right-4 bg-[#F5F5F0] text-[#8A8A6F] px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase border border-[#E5E0D8]/60">
-              Future Feature (Phase 3)
+          {/* Dynamic Resolution Timeline Ledger */}
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex items-center gap-2 text-[#5A5A40]">
+              <Layers className="h-4 w-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Resolution Timeline Ledger</span>
             </div>
-            <div className="flex items-start gap-4">
-              <div className="h-10 w-10 bg-[#E5E0D8]/40 border border-[#E5E0D8] rounded-full flex items-center justify-center text-[#A8A297] shrink-0">
-                <Layers className="h-5 w-5" />
+            
+            <div className="space-y-4 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-[#E5E0D8]/50 pl-1">
+              {/* Status history steps backwards (oldest to newest) */}
+              <div className="flex gap-4 relative">
+                <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center font-mono text-[10px] font-bold shrink-0 z-10">
+                  ●
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Issue Ingested</h4>
+                  <p className="text-[11px] text-[#7A756D] mt-0.5">Complaint officially logged on decentralized ledger.</p>
+                  <p className="text-[9px] text-[#A8A297] font-mono mt-1 font-semibold">{new Date(issue.createdAt).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <h4 className="text-sm font-bold text-[#4A4A3A]">Resolution Timeline Ledger</h4>
-                <p className="text-xs text-[#8A8A6F] mt-1.5 leading-normal">
-                  Historical transition logs (e.g. Ingestion &rarr; Verification &rarr; Official Municipal Assignment &rarr; Resolution proof) will be audited and tracked on this block.
-                </p>
-              </div>
+
+              {issue.statusHistory && [...issue.statusHistory].reverse().map((historyItem: any) => (
+                <div key={historyItem.id} className="flex gap-4 relative">
+                  <div className="w-6 h-6 rounded-full bg-[#A37B5C] border border-[#E5E0D8] text-white flex items-center justify-center font-mono text-[10px] font-bold shrink-0 z-10">
+                    ✓
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Community Verified</h4>
+                    <p className="text-[11px] text-[#7A756D] mt-0.5">{historyItem.note || "Automatically verified after reaching community endorsement threshold."}</p>
+                    <p className="text-[9px] text-[#A8A297] font-mono mt-1 font-semibold">{new Date(historyItem.timestamp).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                </div>
+              ))}
+
+              {/* Pending steps if not resolved */}
+              {issue.status !== "resolved" && (
+                <div className="flex gap-4 relative opacity-60">
+                  <div className="w-6 h-6 rounded-full bg-[#FAF9F6] border border-dashed border-[#A8A297] text-[#A8A297] flex items-center justify-center font-mono text-[10px] font-bold shrink-0 z-10">
+                    ...
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-[#7A756D] uppercase tracking-wider">Official Assignment</h4>
+                    <p className="text-[11px] text-[#8A8A6F] mt-0.5">Awaiting municipal officer response and field delegation.</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -395,22 +515,75 @@ export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetai
             </div>
           </div>
 
-          {/* PLACEHOLDER: Endorsements Widget */}
-          <div className="border border-dashed border-[#E5E0D8] bg-[#FAF9F6]/40 rounded-2xl p-5 relative text-center">
-            <div className="absolute top-4 right-4 bg-[#F5F5F0] text-[#8A8A6F] px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase border border-[#E5E0D8]/60">
-              Future Feature
-            </div>
-            <div className="space-y-3 flex flex-col items-center py-2">
-              <div className="h-10 w-10 rounded-full bg-[#E5E0D8]/40 flex items-center justify-center text-[#A8A297]">
-                <ThumbsUp className="h-5 w-5" />
+          {/* Real-time Endorsement System Interface */}
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[#5A5A40]">
+                <ThumbsUp className={`h-4 w-4 ${issue.endorsed ? "fill-[#A37B5C] text-[#A37B5C]" : ""}`} />
+                <span className="text-xs font-bold uppercase tracking-wider">Citizen Endorsements</span>
               </div>
-              <div className="min-w-0">
-                <h4 className="text-xs font-bold text-[#4A4A3A]">Endorsement Signatures</h4>
-                <p className="text-[10px] text-[#8A8A6F] mt-1 leading-normal">
-                  Endorsement loops and threshold indicators to fast-track complaints to civic authorities are locked.
-                </p>
+              <span className="text-[10px] font-mono text-[#5A5A40] bg-[#F5F5F0] border border-[#E5E0D8] px-2 py-0.5 rounded-full font-bold">
+                {issue.endorsementCount || 0} Signatures
+              </span>
+            </div>
+
+            <p className="text-[11px] text-[#7A756D] leading-normal font-medium">
+              Validate this report with your secure civic endorsement. Issues crossing {COMMUNITY_VERIFICATION_THRESHOLD} community signatures are automatically verified and fast-tracked to municipal departments.
+            </p>
+
+            {/* Verification Progress Bar */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[10px] font-bold text-[#8A8A6F]">
+                <span>Ledger Verification Progress</span>
+                <span>{issue.endorsementCount || 0} / {COMMUNITY_VERIFICATION_THRESHOLD}</span>
+              </div>
+              <div className="w-full bg-[#F5F5F0] h-2 rounded-full overflow-hidden border border-[#E5E0D8]/40">
+                <div 
+                  className="bg-[#A37B5C] h-full transition-all duration-500 rounded-full"
+                  style={{ width: `${Math.min(100, ((issue.endorsementCount || 0) / COMMUNITY_VERIFICATION_THRESHOLD) * 100)}%` }}
+                />
               </div>
             </div>
+
+            <button
+              onClick={handleEndorseClick}
+              disabled={endorsingPending}
+              className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border cursor-pointer ${
+                issue.endorsed
+                  ? "bg-[#FAF9F6] border-[#A37B5C]/40 text-[#A37B5C] hover:bg-[#F5F5F0]"
+                  : "bg-[#5A5A40] hover:bg-[#4A4A30] text-white border-transparent"
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              {endorsingPending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Registering Signature...</span>
+                </>
+              ) : issue.endorsed ? (
+                <>
+                  <span className="text-emerald-600 font-bold">✓</span>
+                  <span>Endorsed</span>
+                </>
+              ) : (
+                <>
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                  <span>Endorse Report</span>
+                </>
+              )}
+            </button>
+
+            {/* Local Toast/Banner Notification */}
+            {localToast && (
+              <div 
+                className={`p-3 rounded-xl border text-[11px] font-semibold text-center transition-all animate-fade-in ${
+                  localToast.type === "success"
+                    ? "bg-emerald-50 border-emerald-100 text-emerald-800"
+                    : "bg-rose-50 border-rose-100 text-rose-800"
+                }`}
+              >
+                {localToast.message}
+              </div>
+            )}
           </div>
 
         </div>

@@ -10,9 +10,13 @@ import {
   MessageSquare, 
   Loader2,
   Lock,
-  Plus
+  Plus,
+  Flame,
+  MapPin,
+  Clock,
+  ChevronRight
 } from "lucide-react";
-import { getGroup, getMyRole, getGroupMembers } from "../api";
+import { getGroup, getMyRole, getGroupMembers, getIssues } from "../api";
 
 interface GroupDetailPageProps {
   groupId: string;
@@ -20,12 +24,21 @@ interface GroupDetailPageProps {
   onJoinGroup: (groupId: string) => Promise<void>;
   onBack: () => void;
   onReportIssue?: (groupId: string) => void;
+  onViewIssue?: (issueId: string) => void;
 }
 
-export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, onBack, onReportIssue }: GroupDetailPageProps) {
+export default function GroupDetailPage({ 
+  groupId, 
+  joinedGroupIds, 
+  onJoinGroup, 
+  onBack, 
+  onReportIssue,
+  onViewIssue 
+}: GroupDetailPageProps) {
   const [group, setGroup] = useState<any>(null);
   const [role, setRole] = useState<"admin" | "member" | null>(null);
   const [members, setMembers] = useState<any[]>([]);
+  const [issues, setIssues] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,11 +51,12 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
         setLoadingMembers(true);
         setError(null);
         
-        // Fetch group details, role, and members list in parallel
-        const [groupRes, roleRes, membersRes] = await Promise.all([
+        // Fetch group details, role, members list, and issues in parallel
+        const [groupRes, roleRes, membersRes, issuesRes] = await Promise.all([
           getGroup(groupId),
           getMyRole(groupId),
-          getGroupMembers(groupId)
+          getGroupMembers(groupId),
+          getIssues({ groupId })
         ]);
 
         if (groupRes && groupRes.success && groupRes.data && groupRes.data.group) {
@@ -57,6 +71,10 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
 
         if (membersRes && membersRes.success && membersRes.data && membersRes.data.members) {
           setMembers(membersRes.data.members);
+        }
+
+        if (issuesRes && issuesRes.success && issuesRes.data && issuesRes.data.issues) {
+          setIssues(issuesRes.data.issues);
         }
       } catch (err: any) {
         console.error("Error loading group details:", err);
@@ -119,6 +137,35 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
   }
 
   const isJoined = joinedGroupIds.includes(groupId) || !!role;
+
+  const resolvedCount = issues.filter(issue => ["resolved", "confirmed", "closed"].includes(issue.status)).length;
+  const reportedCount = issues.length;
+  const civicScore = reportedCount > 0 
+    ? Math.round((resolvedCount / reportedCount) * 100) 
+    : 100;
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "reported":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold text-slate-800">Reported</span>;
+      case "verified":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">Verified</span>;
+      case "assigned":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-bold text-indigo-700">Assigned</span>;
+      case "in_progress":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold text-amber-800">In Progress</span>;
+      case "resolved":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700">Resolved</span>;
+      case "confirmed":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[9px] font-bold text-green-800">Confirmed</span>;
+      case "closed":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[9px] font-bold text-slate-600">Closed</span>;
+      case "disputed":
+        return <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-bold text-red-800">Disputed</span>;
+      default:
+        return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold text-slate-800">Reported</span>;
+    }
+  };
 
   return (
     <div className="flex-grow flex flex-col min-w-0" id="group-detail-container">
@@ -216,7 +263,7 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
                 <AlertTriangle className="h-4 w-4 text-[#A8A297]" />
                 <span>Reported Issues</span>
               </div>
-              <p className="text-xl font-bold text-[#1A1A1A] font-mono">{group.issueCount}</p>
+              <p className="text-xl font-bold text-[#1A1A1A] font-mono">{reportedCount || group.issueCount}</p>
             </div>
 
             <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/60 rounded-xl col-span-1">
@@ -224,7 +271,7 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
                 <CheckCircle2 className="h-4 w-4 text-[#A8A297]" />
                 <span>Resolved Issues</span>
               </div>
-              <p className="text-xl font-bold text-[#1A1A1A] font-mono">0</p>
+              <p className="text-xl font-bold text-[#1A1A1A] font-mono">{resolvedCount}</p>
             </div>
 
             <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/60 rounded-xl col-span-1">
@@ -232,7 +279,7 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
                 <BarChart3 className="h-4 w-4 text-[#A8A297]" />
                 <span>Civic Score</span>
               </div>
-              <p className="text-xl font-bold text-[#5A5A40] font-mono">100%</p>
+              <p className="text-xl font-bold text-[#5A5A40] font-mono">{civicScore}%</p>
             </div>
           </div>
         </section>
@@ -248,26 +295,83 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
                   <AlertTriangle className="h-4 w-4 text-[#5A5A40]" />
                   <span>Recent Local Issues</span>
                 </h3>
-                <span className="text-[10px] font-mono text-[#A8A297] uppercase font-bold bg-[#FAF9F6] px-2 py-0.5 rounded-full border border-[#E5E0D8]">Placeholder</span>
+                <span className="text-[10px] font-mono text-[#5A5A40] bg-[#F5F5F0] px-2 py-0.5 rounded-full border border-[#E5E0D8]">Active Feed</span>
               </div>
               
-              <div className="space-y-4 py-2 text-center text-[#7A756D]" id="placeholder-issues">
-                <p className="text-xs italic">There are no active complaints filed under this community group yet.</p>
-                {isJoined ? (
-                  <button 
-                    onClick={() => onReportIssue && onReportIssue(groupId)}
-                    className="inline-flex items-center gap-1.5 text-xs text-[#5A5A40] hover:underline font-bold py-1 px-3 bg-[#F5F5F0] rounded-lg border border-[#E5E0D8]/50 cursor-pointer"
-                  >
-                    <Plus className="h-3 w-3" />
-                    <span>File First Community Issue</span>
-                  </button>
-                ) : (
-                  <p className="text-[10px] text-[#A8A297] flex items-center justify-center gap-1">
-                    <Lock className="h-3 w-3" />
-                    <span>Join community to create or endorse issues.</span>
-                  </p>
-                )}
-              </div>
+              {issues.length === 0 ? (
+                <div className="space-y-4 py-6 text-center text-[#7A756D]" id="placeholder-issues">
+                  <p className="text-xs italic">There are no active complaints filed under this community group yet.</p>
+                  {isJoined ? (
+                    <button 
+                      onClick={() => onReportIssue && onReportIssue(groupId)}
+                      className="inline-flex items-center gap-1.5 text-xs text-[#5A5A40] hover:underline font-bold py-1 px-3 bg-[#F5F5F0] rounded-lg border border-[#E5E0D8]/50 cursor-pointer"
+                    >
+                      <Plus className="h-3 w-3" />
+                      <span>File First Community Issue</span>
+                    </button>
+                  ) : (
+                    <p className="text-[10px] text-[#A8A297] flex items-center justify-center gap-1">
+                      <Lock className="h-3 w-3" />
+                      <span>Join community to create or endorse issues.</span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                  {issues.map((issue) => {
+                    const mainImage = issue.imageUrls && issue.imageUrls.length > 0 ? issue.imageUrls[0] : null;
+                    return (
+                      <article
+                        key={issue.id}
+                        onClick={() => onViewIssue && onViewIssue(issue.id)}
+                        className="group rounded-xl border border-[#E5E0D8] bg-white hover:border-[#5A5A40]/30 transition-all p-4 flex gap-4 cursor-pointer"
+                      >
+                        {mainImage && (
+                          <div className="w-16 h-16 sm:w-20 sm:h-20 shrink-0 rounded-lg overflow-hidden bg-[#FAF9F6] border border-[#E5E0D8] relative">
+                            <img 
+                              src={mainImage} 
+                              alt="Issue proof" 
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            />
+                          </div>
+                        )}
+                        <div className="flex-grow min-w-0 flex flex-col justify-between space-y-2">
+                          <div>
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <div className="flex items-center gap-1.5">
+                                {getStatusBadge(issue.status)}
+                              </div>
+                              <div className="flex items-center gap-0.5 text-[#5A5A40]" title="Deterministic Priority Score">
+                                <Flame className="h-3 w-3 fill-[#A37B5C] text-[#A37B5C]" />
+                                <span className="text-[10px] font-bold font-mono">{issue.priorityScore || 50}</span>
+                              </div>
+                            </div>
+                            <p className="text-xs text-[#4A4A3A] font-semibold leading-snug line-clamp-2 group-hover:text-[#5A5A40] transition-colors">
+                              {issue.description}
+                            </p>
+                          </div>
+                          
+                          <div className="flex items-center justify-between text-[9px] text-[#A8A297] font-semibold pt-1 border-t border-[#F5F5F0]/60 gap-2">
+                            <span className="truncate max-w-[100px] sm:max-w-xs flex items-center gap-0.5">
+                              <MapPin className="h-2.5 w-2.5 shrink-0" />
+                              <span className="truncate">{issue.location?.address || "Coordinates mapped"}</span>
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center gap-0.5 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8]/80 px-1.5 py-0.2 rounded-full text-[8px] font-bold">
+                                👍 {issue.endorsementCount || 0}
+                              </span>
+                              <span className="shrink-0 flex items-center gap-1">
+                                <Clock className="h-2.5 w-2.5" />
+                                <span>{new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             {/* Discussion Forums placeholder */}

@@ -3,6 +3,7 @@ import { db } from "../firebase-admin";
 import { verifyToken, AuthenticatedRequest } from "../middleware/verifyToken";
 import { FieldValue } from "firebase-admin/firestore";
 import { calculatePriorityScore } from "../utils/priority";
+import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
 
 const router = Router();
 
@@ -174,9 +175,32 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
       ? issueData.dna.createdAt.toDate().toISOString()
       : (issueData.dna?.createdAt || new Date().toISOString());
 
+    const uid = req.user?.uid;
+    let endorsed = false;
+    if (uid) {
+      const endorsementDoc = await db.collection("issues").doc(issueId).collection("endorsements").doc(uid).get();
+      endorsed = endorsementDoc.exists;
+    }
+
+    const statusHistorySnapshot = await db.collection("issues").doc(issueId).collection("status_history").orderBy("timestamp", "desc").get();
+    const statusHistory: any[] = [];
+    statusHistorySnapshot.forEach((doc) => {
+      const data = doc.data();
+      const timestampStr = data.timestamp && typeof data.timestamp.toDate === "function"
+        ? data.timestamp.toDate().toISOString()
+        : (data.timestamp || new Date().toISOString());
+      statusHistory.push({
+        id: doc.id,
+        ...data,
+        timestamp: timestampStr
+      });
+    });
+
     const clientIssue = {
       ...issueData,
       id: issueDoc.id,
+      endorsed,
+      statusHistory,
       createdAt: createdAtStr,
       updatedAt: updatedAtStr,
       dna: issueData.dna ? {
@@ -318,6 +342,97 @@ router.get("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =>
     res.status(500).json({
       success: false,
       error: error.message || "Failed to retrieve issues list."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/endorse
+ * Protected route to toggle endorsement of a civic issue.
+ * Uses a single Firestore transaction for all reads and writes.
+ */
+router.post("/:id/endorse", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const displayName = req.user?.name || "Citizen";
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const endorsementRef = issueRef.collection("endorsements").doc(uid);
+
+    let endorsed = false;
+
+    await db.runTransaction(async (transaction) => {
+      const issueDoc = await transaction.get(issueRef);
+      if (!issueDoc.exists) {
+        throw new Error("Issue not found.");
+      }
+
+      const endorsementDoc = await transaction.get(endorsementRef);
+      const isAdd = !endorsementDoc.exists;
+      endorsed = isAdd;
+
+      if (isAdd) {
+        transaction.set(endorsementRef, {
+          uid,
+          displayName,
+          createdAt: FieldValue.serverTimestamp()
+        });
+      } else {
+        transaction.delete(endorsementRef);
+      }
+
+      const currentCount = issueDoc.data()?.endorsementCount || 0;
+      const newCount = isAdd ? currentCount + 1 : Math.max(0, currentCount - 1);
+
+      const issueData = issueDoc.data() || {};
+      const updatedIssueDataForPriority = {
+        description: issueData.description || "",
+        imageUrls: issueData.imageUrls || [],
+        location: issueData.location || { latitude: 0, longitude: 0, address: "" },
+        endorsementCount: newCount
+      };
+      const newPriorityScore = calculatePriorityScore(updatedIssueDataForPriority);
+
+      let newStatus = issueData.status || "reported";
+
+      if (currentCount < COMMUNITY_VERIFICATION_THRESHOLD && newCount >= COMMUNITY_VERIFICATION_THRESHOLD && newStatus === "reported") {
+        newStatus = "verified";
+
+        const historyRef = issueRef.collection("status_history").doc();
+        transaction.set(historyRef, {
+          fromStatus: "reported",
+          toStatus: "verified",
+          changedBy: "system",
+          note: "Automatically verified after reaching community endorsement threshold.",
+          timestamp: FieldValue.serverTimestamp()
+        });
+
+        // TODO: Invoke Community Agent here.
+      }
+
+      transaction.update(issueRef, {
+        endorsementCount: newCount,
+        priorityScore: newPriorityScore,
+        status: newStatus,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    });
+
+    res.json({
+      success: true,
+      endorsed
+    });
+  } catch (error: any) {
+    console.error("Error endorsing issue:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to toggle endorsement."
     });
   }
 });

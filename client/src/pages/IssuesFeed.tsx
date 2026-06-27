@@ -34,6 +34,7 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
     initialGroupId ? "my-groups" : "public"
   );
   const [selectedGroupId, setSelectedGroupId] = useState<string>(initialGroupId || "");
+  const [sortBy, setSortBy] = useState<"newest" | "priority" | "endorsed">("newest");
 
   // Fetch issues based on selected filters
   const fetchIssuesList = useCallback(async () => {
@@ -161,22 +162,38 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
           </button>
         </div>
 
-        {/* Conditional Group Dropdown inside My Communities */}
-        {activeScope === "my-groups" && (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Conditional Group Dropdown inside My Communities */}
+          {activeScope === "my-groups" && (
+            <div className="w-full sm:w-auto shrink-0 flex items-center gap-2">
+              <span className="text-xs text-[#7A756D] font-medium hidden sm:inline">Filter:</span>
+              <select
+                value={selectedGroupId}
+                onChange={(e) => setSelectedGroupId(e.target.value)}
+                className="w-full sm:w-56 text-xs bg-white border border-[#E5E0D8] rounded-xl px-3 py-1.5 focus:outline-none focus:border-[#5A5A40] transition-colors font-medium text-[#1A1A1A]"
+              >
+                <option value="">All My Communities</option>
+                {joinedGroups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Sort Dropdown */}
           <div className="w-full sm:w-auto shrink-0 flex items-center gap-2">
-            <span className="text-xs text-[#7A756D] font-medium hidden sm:inline">Filter:</span>
+            <span className="text-xs text-[#7A756D] font-medium">Sort:</span>
             <select
-              value={selectedGroupId}
-              onChange={(e) => setSelectedGroupId(e.target.value)}
-              className="w-full sm:w-64 text-xs bg-white border border-[#E5E0D8] rounded-xl px-3 py-1.5 focus:outline-none focus:border-[#5A5A40] transition-colors font-medium text-[#1A1A1A]"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="w-full sm:w-44 text-xs bg-white border border-[#E5E0D8] rounded-xl px-3 py-1.5 focus:outline-none focus:border-[#5A5A40] transition-colors font-medium text-[#1A1A1A]"
             >
-              <option value="">All My Communities</option>
-              {joinedGroups.map((g) => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
+              <option value="newest">🕒 Newest First</option>
+              <option value="priority">🔥 Highest Priority</option>
+              <option value="endorsed">👍 Most Endorsed</option>
             </select>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Main Stream Area */}
@@ -226,81 +243,98 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-6 max-w-3xl mx-auto">
-            {issues.map((issue) => {
-              const mainImage = issue.imageUrls && issue.imageUrls.length > 0 ? issue.imageUrls[0] : null;
-              
-              return (
-                <article
-                  key={issue.id}
-                  onClick={() => onViewIssue(issue.id)}
-                  className="group rounded-2xl border border-[#E5E0D8] bg-white hover:border-[#5A5A40]/30 transition-all shadow-xs overflow-hidden flex flex-col md:flex-row cursor-pointer"
-                >
-                  {/* Image side column (left on large, top on mobile) */}
-                  {mainImage && (
-                    <div className="md:w-56 shrink-0 aspect-video md:aspect-auto relative bg-[#FAF9F6] overflow-hidden border-b md:border-b-0 md:border-r border-[#E5E0D8]">
-                      <img 
-                        src={mainImage} 
-                        alt="Issue proof" 
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-102"
-                      />
-                      {issue.imageUrls.length > 1 && (
-                        <span className="absolute bottom-2 right-2 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-md">
-                          +{issue.imageUrls.length - 1} photos
+            {(() => {
+              const sortedIssues = [...issues].sort((a, b) => {
+                if (sortBy === "priority") {
+                  return (b.priorityScore || 0) - (a.priorityScore || 0);
+                }
+                if (sortBy === "endorsed") {
+                  return (b.endorsementCount || 0) - (a.endorsementCount || 0);
+                }
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              });
+
+              return sortedIssues.map((issue) => {
+                const mainImage = issue.imageUrls && issue.imageUrls.length > 0 ? issue.imageUrls[0] : null;
+                
+                return (
+                  <article
+                    key={issue.id}
+                    onClick={() => onViewIssue(issue.id)}
+                    className="group rounded-2xl border border-[#E5E0D8] bg-white hover:border-[#5A5A40]/30 transition-all shadow-xs overflow-hidden flex flex-col md:flex-row cursor-pointer"
+                  >
+                    {/* Image side column (left on large, top on mobile) */}
+                    {mainImage && (
+                      <div className="md:w-56 shrink-0 aspect-video md:aspect-auto relative bg-[#FAF9F6] overflow-hidden border-b md:border-b-0 md:border-r border-[#E5E0D8]">
+                        <img 
+                          src={mainImage} 
+                          alt="Issue proof" 
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-102"
+                        />
+                        {issue.imageUrls.length > 1 && (
+                          <span className="absolute bottom-2 right-2 bg-black/75 text-white text-[10px] font-bold px-2 py-0.5 rounded-md">
+                            +{issue.imageUrls.length - 1} photos
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Body Info column (right on large, bottom on mobile) */}
+                    <div className="flex-grow p-5 flex flex-col justify-between space-y-4">
+                      <div>
+                        {/* Priority and Status header */}
+                        <div className="flex items-center justify-between gap-3 mb-2.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {issue.groupName && (
+                              <span className="text-[10px] font-bold text-[#5A5A40] uppercase tracking-wider bg-[#F5F5F0] border border-[#E5E0D8] px-2 py-0.5 rounded-md">
+                                {issue.groupName}
+                              </span>
+                            )}
+                            {getStatusBadge(issue.status)}
+                          </div>
+
+                          {/* Priority Flame score */}
+                          <div className="flex items-center gap-1 bg-[#FAF9F6] px-2 py-0.5 rounded-lg border border-[#E5E0D8] text-[#5A5A40]" title="Deterministic Priority Score">
+                            <Flame className="h-3.5 w-3.5 fill-[#A37B5C] text-[#A37B5C]" />
+                            <span className="text-[11px] font-bold font-mono">{issue.priorityScore || 50}</span>
+                          </div>
+                        </div>
+
+                        {/* Brief description */}
+                        <p className="text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3">
+                          {issue.description}
+                        </p>
+
+                        {/* Landmark address pin */}
+                        <div className="flex items-center gap-1.5 text-xs text-[#7A756D] bg-[#FAF9F6] px-2.5 py-1.5 rounded-lg border border-[#E5E0D8]/60">
+                          <MapPin className="h-3.5 w-3.5 text-[#A8A297] shrink-0" />
+                          <span className="truncate">{issue.location.address || "Coordinates mapped"}</span>
+                        </div>
+                      </div>
+
+                      {/* Footer stats and meta */}
+                      <div className="flex items-center justify-between pt-3 border-t border-[#F5F5F0] text-[10px] text-[#A8A297] font-semibold">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            <span>Filed {new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
+                            <span>by {issue.authorName || "Citizen"}</span>
+                          </div>
+                          <span className="inline-flex items-center gap-1 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-2 py-0.5 rounded-full text-[9px] font-bold">
+                            👍 {issue.endorsementCount || 0} Endorsements
+                          </span>
+                        </div>
+                        
+                        <span className="text-[#5A5A40] flex items-center gap-0.5 hover:underline group-hover:translate-x-0.5 transition-transform">
+                          <span>Inspect complaint</span>
+                          <ChevronRight className="h-3 w-3" />
                         </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Body Info column (right on large, bottom on mobile) */}
-                  <div className="flex-grow p-5 flex flex-col justify-between space-y-4">
-                    <div>
-                      {/* Priority and Status header */}
-                      <div className="flex items-center justify-between gap-3 mb-2.5">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {issue.groupName && (
-                            <span className="text-[10px] font-bold text-[#5A5A40] uppercase tracking-wider bg-[#F5F5F0] border border-[#E5E0D8] px-2 py-0.5 rounded-md">
-                              {issue.groupName}
-                            </span>
-                          )}
-                          {getStatusBadge(issue.status)}
-                        </div>
-
-                        {/* Priority Flame score */}
-                        <div className="flex items-center gap-1 bg-[#FAF9F6] px-2 py-0.5 rounded-lg border border-[#E5E0D8] text-[#5A5A40]" title="Deterministic Priority Score">
-                          <Flame className="h-3.5 w-3.5 fill-[#A37B5C] text-[#A37B5C]" />
-                          <span className="text-[11px] font-bold font-mono">{issue.priorityScore || 50}</span>
-                        </div>
-                      </div>
-
-                      {/* Brief description */}
-                      <p className="text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3">
-                        {issue.description}
-                      </p>
-
-                      {/* Landmark address pin */}
-                      <div className="flex items-center gap-1.5 text-xs text-[#7A756D] bg-[#FAF9F6] px-2.5 py-1.5 rounded-lg border border-[#E5E0D8]/60">
-                        <MapPin className="h-3.5 w-3.5 text-[#A8A297] shrink-0" />
-                        <span className="truncate">{issue.location.address || "Coordinates mapped"}</span>
                       </div>
                     </div>
-
-                    {/* Footer stats and meta */}
-                    <div className="flex items-center justify-between pt-3 border-t border-[#F5F5F0] text-[10px] text-[#A8A297] font-semibold">
-                      <div className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        <span>Filed {new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
-                        <span>by {issue.authorName || "Citizen"}</span>
-                      </div>
-                      
-                      <span className="text-[#5A5A40] flex items-center gap-0.5 hover:underline group-hover:translate-x-0.5 transition-transform">
-                        <span>Inspect complaint</span>
-                        <ChevronRight className="h-3 w-3" />
-                      </span>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+                  </article>
+                );
+              });
+            })()}
           </div>
         )}
       </section>

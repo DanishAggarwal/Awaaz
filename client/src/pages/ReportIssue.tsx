@@ -3,6 +3,12 @@ import { auth } from "../firebase";
 import { createIssue } from "../api";
 import { uploadImage } from "../utils/uploadImage";
 import { 
+  getCurrentLocation, 
+  reverseGeocode, 
+  searchLocations, 
+  LocationSuggestion 
+} from "../utils/location";
+import { 
   Compass, 
   MapPin, 
   Image as ImageIcon, 
@@ -33,10 +39,12 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
   
   const [description, setDescription] = useState("");
   
-  // Location states
-  const [address, setAddress] = useState("");
-  const [latitude, setLatitude] = useState<number | "">("");
-  const [longitude, setLongitude] = useState<number | "">("");
+  // Location autocomplete / selection states
+  const [selectedLocation, setSelectedLocation] = useState<LocationSuggestion | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [locationMessage, setLocationMessage] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
 
@@ -52,68 +60,58 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
     handleDetectLocation();
   }, []);
 
-  // Handle Geolocation Detection
-  const handleDetectLocation = () => {
-    if (!navigator.geolocation) {
-      setLocationMessage({ text: "Geolocation is not supported by your browser.", type: "error" });
+  // Search Address/Landmark debounce effect
+  useEffect(() => {
+    if (searchQuery.trim().length < 3) {
+      setSuggestions([]);
       return;
     }
 
+    const delayDebounceFn = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const results = await searchLocations(searchQuery);
+        setSuggestions(results);
+        setShowSuggestions(true);
+      } catch (err) {
+        console.error("Error searching locations:", err);
+      } finally {
+        setSearching(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchQuery]);
+
+  // Handle Geolocation Detection
+  const handleDetectLocation = async () => {
     setDetectingLocation(true);
     setLocationMessage({ text: "Detecting satellite coordinates...", type: "info" });
+    setSelectedLocation(null);
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        setLatitude(lat);
-        setLongitude(lng);
-        setLocationMessage({ 
-          text: `GPS locked: (${lat.toFixed(4)}, ${lng.toFixed(4)}). Finding nearest landmark...`, 
-          type: "info" 
-        });
+    try {
+      const coords = await getCurrentLocation();
+      setLocationMessage({ 
+        text: `GPS locked: (${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}). Finding nearest landmark...`, 
+        type: "info" 
+      });
 
-        // Reverse geocoding with OpenStreetMap Nominatim
-        try {
-          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
-            headers: {
-              "Accept-Language": "en"
-            }
-          });
-          if (response.ok) {
-            const data = await response.json();
-            if (data && data.display_name) {
-              setAddress(data.display_name);
-              setLocationMessage({ 
-                text: `Position locked & reverse geocoded: ${data.display_name}`, 
-                type: "success" 
-              });
-              setDetectingLocation(false);
-              return;
-            }
-          }
-        } catch (err) {
-          console.warn("Reverse geocoding with Nominatim failed, using fallback:", err);
-        }
-
-        // Fallback if reverse geocoding is slow or blocked
-        setAddress(`Coordinates: ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-        setLocationMessage({ 
-          text: `Position locked successfully: (${lat.toFixed(4)}, ${lng.toFixed(4)})`, 
-          type: "success" 
-        });
-        setDetectingLocation(false);
-      },
-      (err) => {
-        console.error("Geolocation error:", err);
-        setDetectingLocation(false);
-        setLocationMessage({ 
-          text: "Unable to retrieve GPS coordinates. Please enter the manual address details below.", 
-          type: "error" 
-        });
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
+      const location = await reverseGeocode(coords.latitude, coords.longitude);
+      setSelectedLocation(location);
+      setSearchQuery(location.address);
+      setLocationMessage({ 
+        text: `Position locked successfully: ${location.address}`, 
+        type: "success" 
+      });
+    } catch (err: any) {
+      console.error("GPS detection failed:", err);
+      setLocationMessage({ 
+        text: err.message || "Unable to retrieve GPS coordinates. Please search for an address manually below.", 
+        type: "error" 
+      });
+    } finally {
+      setDetectingLocation(false);
+    }
   };
 
   // Handle File Selection and Drag & Drop
@@ -157,7 +155,7 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
     }
   };
 
-  // Form Submission and Firebase Storage Upload
+  // Form Submission and Image Upload
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -179,8 +177,8 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
       return;
     }
 
-    if (!address.trim()) {
-      setError("Please enter a street address or descriptive landmark for the issue location.");
+    if (!selectedLocation || !selectedLocation.address.trim() || typeof selectedLocation.latitude !== "number" || typeof selectedLocation.longitude !== "number") {
+      setError("Please select a valid location using GPS detection or search autocomplete.");
       return;
     }
 
@@ -213,9 +211,9 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
         description: description.trim(),
         imageUrls,
         location: {
-          latitude: latitude !== "" ? Number(latitude) : null,
-          longitude: longitude !== "" ? Number(longitude) : null,
-          address: address.trim()
+          latitude: selectedLocation.latitude,
+          longitude: selectedLocation.longitude,
+          address: selectedLocation.address.trim()
         }
       });
 
@@ -380,25 +378,26 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
 
         {/* 4. Location Details */}
         <div className="space-y-4 border-t border-[#F5F5F0] pt-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-[#5A5A40]">
                 Issue Location <span className="text-rose-500">*</span>
               </label>
-              <p className="text-[11px] text-[#7A756D]">Lock your precise location using GPS, or enter address details manually.</p>
+              <p className="text-[11px] text-[#7A756D]">Set a precise geocoded location. Coordinates are verified instantly.</p>
             </div>
+            
             <button
               type="button"
               onClick={handleDetectLocation}
               disabled={detectingLocation || isUploading}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#F5F5F0] hover:bg-[#5A5A40] hover:text-white border border-[#E5E0D8] text-[10px] font-bold rounded-lg transition-colors text-[#5A5A40] cursor-pointer"
+              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#FAF9F6] hover:bg-[#5A5A40] hover:text-white border border-[#E5E0D8] text-xs font-bold rounded-xl transition-all text-[#5A5A40] cursor-pointer"
             >
               {detectingLocation ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Compass className="h-3.5 w-3.5" />
               )}
-              <span>Detect My Location</span>
+              <span>📍 Use Current Location</span>
             </button>
           </div>
 
@@ -419,21 +418,81 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-semibold text-[#7A756D]" htmlFor="issue-address">Street / Landmark Address</label>
+          {/* Option B: Search Input */}
+          <div className="space-y-1.5 relative">
+            <label className="text-[11px] font-semibold text-[#7A756D]" htmlFor="issue-search">
+              🔍 Search Address, Locality, or Landmark
+            </label>
             <div className="relative">
-              <MapPin className="absolute left-3.5 top-3 h-4 w-4 text-[#A8A297]" />
+              <MapPin className="absolute left-3.5 top-3.5 h-4 w-4 text-[#A8A297]" />
               <input
-                id="issue-address"
+                id="issue-search"
                 type="text"
-                placeholder="e.g. Near Pillar 120, Sector 12, Dwarka, New Delhi"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Type apartment, society, street name, metro station..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setShowSuggestions(true);
+                }}
                 disabled={isUploading}
-                className="w-full text-xs bg-white border border-[#E5E0D8] rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:border-[#5A5A40] transition-colors text-[#1A1A1A] placeholder:text-[#A8A297]"
+                className="w-full text-xs bg-white border border-[#E5E0D8] rounded-xl pl-10 pr-10 py-3.5 focus:outline-none focus:border-[#5A5A40] transition-colors text-[#1A1A1A] placeholder:text-[#A8A297]"
               />
+              {searching && (
+                <Loader2 className="absolute right-3.5 top-3.5 h-4 w-4 animate-spin text-[#5A5A40]" />
+              )}
             </div>
+
+            {/* Suggestions Dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#E5E0D8] rounded-xl shadow-lg max-h-60 overflow-y-auto divide-y divide-[#F5F5F0]">
+                {suggestions.map((suggestion, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setSelectedLocation(suggestion);
+                      setSearchQuery(suggestion.address);
+                      setShowSuggestions(false);
+                      setLocationMessage({ 
+                        text: "Location selected successfully from search suggestions.", 
+                        type: "success" 
+                      });
+                    }}
+                    className="w-full text-left px-4 py-3 text-xs text-[#4A4A3A] hover:bg-[#FAF9F6] transition-colors flex items-start gap-2 cursor-pointer"
+                  >
+                    <MapPin className="h-3.5 w-3.5 text-[#A37B5C] shrink-0 mt-0.5" />
+                    <span className="truncate">{suggestion.address}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Selected Location Confirmation Box */}
+          {selectedLocation ? (
+            <div className="bg-[#FAF9F6] border border-emerald-200/80 rounded-xl p-4 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3 text-emerald-600" />
+                  ✓ Valid Location Locked
+                </span>
+                <span className="text-[9px] font-mono font-semibold text-[#7A756D] bg-white border border-[#E5E0D8] px-1.5 py-0.5 rounded-md uppercase">
+                  Source: {selectedLocation.source}
+                </span>
+              </div>
+              <h4 className="text-xs font-bold text-[#1A1A1A] leading-relaxed">{selectedLocation.address}</h4>
+              <p className="text-[10px] text-[#7A756D] font-mono">
+                Coordinates: {selectedLocation.latitude.toFixed(6)}, {selectedLocation.longitude.toFixed(6)}
+              </p>
+            </div>
+          ) : (
+            <div className="bg-rose-50 border border-rose-200/60 rounded-xl p-4">
+              <span className="text-xs font-medium text-rose-800 flex items-center gap-1.5">
+                <AlertCircle className="h-4 w-4 text-rose-600" />
+                No Valid Location Selected. Use GPS detection or search a landmark above.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Form Footer & Actions */}

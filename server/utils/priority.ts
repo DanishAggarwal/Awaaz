@@ -11,6 +11,7 @@ export function calculatePriorityScore(issueData: {
     longitude: number;
     address?: string;
   };
+  endorsementCount?: number;
 }): number {
   let score = 50; // Base score
 
@@ -38,6 +39,10 @@ export function calculatePriorityScore(issueData: {
   if (issueData.location && issueData.location.address) {
     score += 5;
   }
+
+  // 4. Endorsement influence (each endorsement adds 5 points to show growing community urgency)
+  const endorsements = issueData.endorsementCount || 0;
+  score += endorsements * 5;
 
   // Bound the score tightly between 1 and 100
   return Math.min(100, Math.max(1, score));

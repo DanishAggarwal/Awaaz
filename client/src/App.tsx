@@ -564,6 +564,10 @@ function MainDashboard() {
                 setActiveGroupId(groupId);
                 setActiveTab("report_issue");
               }}
+              onViewIssue={(issueId) => {
+                setActiveIssueId(issueId);
+                setActiveTab("issue_detail");
+              }}
             />
           ) : activeTab === "report_issue" ? (
             <ReportIssue

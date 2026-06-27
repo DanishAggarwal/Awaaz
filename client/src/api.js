@@ -154,3 +154,13 @@ export async function getIssues(params = {}) {
   return apiRequest(`/issues${queryString}`);
 }
 
+/**
+ * Protected: Endorse or un-endorse a civic issue.
+ * Matches POST /api/issues/:id/endorse
+ */
+export async function endorseIssue(id) {
+  return apiRequest(`/issues/${id}/endorse`, {
+    method: "POST"
+  });
+}
+
