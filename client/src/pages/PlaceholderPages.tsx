@@ -109,7 +109,7 @@ export function NearbyIssues() {
    2. MY REPORTS (Fully Real Citizen Tracker)
    ========================================== */
 interface MyReportsProps {
-  onViewIssue: (id: string) => void;
+  onViewIssue: (id: string, scrollToComments?: boolean) => void;
 }
 
 export function MyReports({ onViewIssue }: MyReportsProps) {

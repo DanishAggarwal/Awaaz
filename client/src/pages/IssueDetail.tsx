@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { getIssue, endorseIssue } from "../api";
+import { getIssue, endorseIssue, getComments, createComment, updateComment, deleteComment } from "../api";
+import { useAuth } from "../context/AuthContext";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../../../server/config/constants";
 import { 
   MapPin, 
@@ -18,16 +19,19 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  Maximize2
+  Maximize2,
+  Edit2,
+  Trash2
 } from "lucide-react";
 
 interface IssueDetailProps {
   issueId: string;
+  scrollToComments?: boolean;
   onBack: () => void;
   onViewGroup?: (groupId: string) => void;
 }
 
-export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetailProps) {
+export default function IssueDetail({ issueId, scrollToComments, onBack, onViewGroup }: IssueDetailProps) {
   const [issue, setIssue] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +39,220 @@ export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetai
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
   const [localToast, setLocalToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [endorsingPending, setEndorsingPending] = useState(false);
+
+  const commentsSectionRef = React.useRef<HTMLDivElement>(null);
+  const commentInputRef = React.useRef<HTMLTextAreaElement>(null);
+
+  const { user } = useAuth();
+  const [comments, setComments] = useState<any[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [newCommentText, setNewCommentText] = useState("");
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+
+  useEffect(() => {
+    if (scrollToComments && !loading) {
+      const timer = setTimeout(() => {
+        if (commentsSectionRef.current) {
+          commentsSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        if (commentInputRef.current) {
+          commentInputRef.current.focus({ preventScroll: true });
+        }
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [scrollToComments, loading]);
+
+  const formatRelativeTime = (dateInput: string) => {
+    try {
+      const now = new Date();
+      const past = new Date(dateInput);
+      const diffMs = now.getTime() - past.getTime();
+      
+      if (isNaN(diffMs) || diffMs < 0) {
+        return "just now";
+      }
+
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 1) return "just now";
+      if (diffMins < 60) return `${diffMins}m ago`;
+
+      const diffHours = Math.floor(diffMins / 60);
+      if (diffHours < 24) return `${diffHours}h ago`;
+
+      const diffDays = Math.floor(diffHours / 24);
+      if (diffDays < 7) return `${diffDays}d ago`;
+
+      return past.toLocaleDateString("en-IN", { day: 'numeric', month: 'short' });
+    } catch (e) {
+      return "recently";
+    }
+  };
+
+  const loadComments = async () => {
+    try {
+      setCommentsLoading(true);
+      const res = await getComments(issueId);
+      if (res && res.success && res.data) {
+        setComments(res.data.comments || []);
+      }
+    } catch (err) {
+      console.error("Failed to load comments:", err);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadComments();
+  }, [issueId]);
+
+  const handlePostComment = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newCommentText || !newCommentText.trim() || submittingComment || !user) return;
+
+    const trimmedText = newCommentText.trim();
+    const tempId = `temp-${Date.now()}`;
+    
+    const optimisticComment = {
+      id: tempId,
+      uid: user.uid,
+      displayName: user.displayName || "Citizen",
+      photoURL: user.photoURL || "",
+      text: trimmedText,
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+      isEdited: false,
+      isOptimistic: true
+    };
+
+    const prevComments = [...comments];
+    const prevCommentCount = issue?.commentCount || 0;
+
+    setComments(prev => [optimisticComment, ...prev]);
+    setIssue((prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        commentCount: (prev.commentCount || 0) + 1
+      };
+    });
+
+    setNewCommentText("");
+    setSubmittingComment(true);
+
+    try {
+      const res = await createComment(issueId, { text: trimmedText });
+      if (res && res.success && res.data && res.data.comment) {
+        setComments(prev => 
+          prev.map(c => c.id === tempId ? res.data.comment : c)
+        );
+        setLocalToast({ message: "Comment posted successfully!", type: "success" });
+      } else {
+        throw new Error(res?.error || "Server rejected comment creation.");
+      }
+    } catch (err: any) {
+      console.error("Failed to post comment:", err);
+      setComments(prevComments);
+      setIssue((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          commentCount: prevCommentCount
+        };
+      });
+      setNewCommentText(trimmedText);
+      setLocalToast({ message: err.message || "Failed to post comment. Please try again.", type: "error" });
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!user) return;
+    
+    const commentToDelete = comments.find(c => c.id === commentId);
+    if (!commentToDelete) return;
+
+    const prevComments = [...comments];
+    const prevCommentCount = issue?.commentCount || 0;
+
+    setComments(prev => prev.filter(c => c.id !== commentId));
+    setIssue((prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        commentCount: Math.max(0, (prev.commentCount || 0) - 1)
+      };
+    });
+
+    try {
+      const res = await deleteComment(issueId, commentId);
+      if (res && res.success) {
+        setLocalToast({ message: "Comment deleted successfully.", type: "success" });
+      } else {
+        throw new Error(res?.error || "Server failed to delete comment.");
+      }
+    } catch (err: any) {
+      console.error("Failed to delete comment:", err);
+      setComments(prevComments);
+      setIssue((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          commentCount: prevCommentCount
+        };
+      });
+      setLocalToast({ message: err.message || "Failed to delete comment. Please try again.", type: "error" });
+    }
+  };
+
+  const handleStartEdit = (comment: any) => {
+    setEditingCommentId(comment.id);
+    setEditingText(comment.text);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCommentId(null);
+    setEditingText("");
+  };
+
+  const handleSaveEdit = async (commentId: string) => {
+    if (!editingText || !editingText.trim() || !user) return;
+    const trimmedText = editingText.trim();
+
+    const prevComments = [...comments];
+    
+    setComments(prev => 
+      prev.map(c => c.id === commentId ? { ...c, text: trimmedText, isEdited: true } : c)
+    );
+    setEditingCommentId(null);
+
+    try {
+      const res = await updateComment(issueId, commentId, { text: trimmedText });
+      if (res && res.success && res.data && res.data.comment) {
+        setComments(prev =>
+          prev.map(c => c.id === commentId ? res.data.comment : c)
+        );
+        setLocalToast({ message: "Comment updated successfully.", type: "success" });
+      } else {
+        throw new Error(res?.error || "Server rejected comment update.");
+      }
+    } catch (err: any) {
+      console.error("Failed to update comment:", err);
+      setComments(prevComments);
+      setLocalToast({ message: err.message || "Failed to update comment. Please try again.", type: "error" });
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handlePostComment();
+    }
+  };
 
   useEffect(() => {
     if (localToast) {
@@ -368,21 +586,185 @@ export default function IssueDetail({ issueId, onBack, onViewGroup }: IssueDetai
             </div>
           </div>
 
-          {/* PLACEHOLDER SECTION 1: Community Discussion */}
-          <div className="border border-dashed border-[#E5E0D8] bg-[#FAF9F6]/40 rounded-2xl p-6 relative">
-            <div className="absolute top-4 right-4 bg-[#F5F5F0] text-[#8A8A6F] px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase border border-[#E5E0D8]/60">
-              Future Feature (Phase 2)
+          {/* --- COMMUNITY DISCUSSION SYSTEM (COMMENTS) --- */}
+          <div ref={commentsSectionRef} className="space-y-6">
+            {/* Endorsements and Comments counts headers */}
+            <div className="flex items-center gap-6 text-sm font-bold text-[#5A5A40] uppercase tracking-wider border-b border-[#E5E0D8]/60 pb-3">
+              <span className="flex items-center gap-1.5">
+                👍 {issue.endorsementCount || 0} Endorsements
+              </span>
+              <span className="flex items-center gap-1.5 text-[#A37B5C]">
+                💬 {issue.commentCount || 0} Comments
+              </span>
             </div>
-            <div className="flex items-start gap-4">
-              <div className="h-10 w-10 bg-[#E5E0D8]/40 border border-[#E5E0D8] rounded-full flex items-center justify-center text-[#A8A297] shrink-0">
-                <MessageSquare className="h-5 w-5" />
+
+            {/* Write Comment Box */}
+            <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs">
+              {user ? (
+                <form onSubmit={(e) => { e.preventDefault(); handlePostComment(); }} className="space-y-4">
+                  <div className="flex gap-3">
+                    {user.photoURL ? (
+                      <img 
+                        src={user.photoURL} 
+                        alt={user.displayName} 
+                        className="h-9 w-9 rounded-full border border-[#E5E0D8] shrink-0"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="h-9 w-9 rounded-full bg-[#FAF9F6] border border-[#E5E0D8] text-[#5A5A40] flex items-center justify-center font-bold text-xs shrink-0">
+                        {user.displayName?.[0] || "C"}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-grow">
+                      <div className="text-xs font-bold text-[#1A1A1A] mb-1">{user.displayName || "Citizen"}</div>
+                      <textarea
+                        ref={commentInputRef}
+                        rows={3}
+                        value={newCommentText}
+                        onChange={(e) => setNewCommentText(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        disabled={submittingComment}
+                        placeholder="Write a comment... observation, local consensus evidence, or municipal field update..."
+                        className="w-full text-sm text-[#4A4A3A] bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-3 focus:outline-none focus:ring-1 focus:ring-[#5A5A40] focus:border-[#5A5A40] transition-all placeholder-[#A8A297] resize-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={submittingComment || !newCommentText.trim()}
+                      className="bg-[#5A5A40] hover:bg-[#4A4A30] disabled:bg-[#F5F5F0] disabled:text-[#A8A297] text-white text-xs font-bold px-5 py-2 rounded-xl transition-all border border-transparent disabled:border-[#E5E0D8]/40 cursor-pointer flex items-center gap-1.5"
+                    >
+                      {submittingComment ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>Posting...</span>
+                        </>
+                      ) : (
+                        <span>Post</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="text-center py-4 text-xs text-[#8A8A6F] font-semibold bg-[#FAF9F6] border border-dashed border-[#E5E0D8] rounded-xl">
+                  Please sign in with Google to participate in the civic discussion.
+                </div>
+              )}
+            </div>
+
+            {/* Comments Feed Thread list */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-[#F5F5F0] pb-2">
+                <span className="text-[10px] uppercase font-bold text-[#8A8A6F] tracking-wider">Newest</span>
               </div>
-              <div className="min-w-0">
-                <h4 className="text-sm font-bold text-[#4A4A3A]">Community Discussion Board</h4>
-                <p className="text-xs text-[#8A8A6F] mt-1.5 leading-normal">
-                  Comment boards, replies, municipal tracking logs, and local consensus-building tools are locked for this phase. Discussion threads will plug in seamlessly in a future release.
-                </p>
-              </div>
+
+              {commentsLoading && comments.length === 0 ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-[#8A8A6F]" />
+                </div>
+              ) : comments.length === 0 ? (
+                <div className="text-center py-10 text-xs text-[#A8A297] font-medium bg-[#FAF9F6]/30 border border-dashed border-[#E5E0D8]/40 rounded-xl">
+                  No comments posted yet. Share your observation!
+                </div>
+              ) : (
+                <div className="space-y-4 divide-y divide-[#F5F5F0]">
+                  {comments.map((comment) => {
+                    const isAuthor = user && user.uid === comment.uid;
+                    const isEditing = editingCommentId === comment.id;
+
+                    return (
+                      <div key={comment.id} className="pt-4 first:pt-0 flex gap-3">
+                        {comment.photoURL ? (
+                          <img 
+                            src={comment.photoURL} 
+                            alt={comment.displayName} 
+                            className="h-8 w-8 rounded-full border border-[#E5E0D8] shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-[#FAF9F6] border border-[#E5E0D8] text-[#5A5A40] flex items-center justify-center font-bold text-xs shrink-0">
+                            {comment.displayName?.[0] || "C"}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-grow">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold text-[#1A1A1A]">{comment.displayName}</span>
+                              {isAuthor && (
+                                <span className="text-[8px] font-bold text-[#A37B5C] bg-[#FAF9F6] border border-[#E5E0D8]/60 px-1 py-0.2 rounded">
+                                  Author
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[9px] font-medium text-[#A8A297]">
+                              {formatRelativeTime(comment.createdAt)}
+                            </span>
+                          </div>
+
+                          {isEditing ? (
+                            <div className="mt-2 space-y-2">
+                              <textarea
+                                rows={2}
+                                value={editingText}
+                                onChange={(e) => setEditingText(e.target.value)}
+                                className="w-full text-xs text-[#4A4A3A] bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-2.5 focus:outline-none focus:ring-1 focus:ring-[#5A5A40] focus:border-[#5A5A40] transition-all resize-none"
+                              />
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={handleCancelEdit}
+                                  className="px-3 py-1 text-[10px] font-bold text-[#7A756D] bg-[#FAF9F6] border border-[#E5E0D8] rounded-lg hover:bg-[#F5F5F0] transition-all cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  onClick={() => handleSaveEdit(comment.id)}
+                                  disabled={!editingText.trim()}
+                                  className="px-3 py-1 text-[10px] font-bold text-white bg-[#5A5A40] rounded-lg hover:bg-[#4A4A30] transition-all cursor-pointer disabled:opacity-50"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-1">
+                              <p className="text-xs text-[#4A4A3A] leading-relaxed whitespace-pre-wrap font-medium">
+                                {comment.text}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1.5">
+                                {comment.isEdited && (
+                                  <span className="text-[9px] font-bold text-[#8A8A6F] italic">
+                                    Edited
+                                  </span>
+                                )}
+                                {isAuthor && !comment.isOptimistic && (
+                                  <div className="flex items-center gap-2 ml-auto text-[10px] font-bold text-[#8A8A6F]">
+                                    <button
+                                      onClick={() => handleStartEdit(comment)}
+                                      className="hover:text-[#5A5A40] flex items-center gap-0.5 transition-colors cursor-pointer border-none bg-transparent p-0 font-bold"
+                                    >
+                                      <Edit2 className="h-2.5 w-2.5" />
+                                      <span>Edit</span>
+                                    </button>
+                                    <span className="text-[#E5E0D8]">|</span>
+                                    <button
+                                      onClick={() => handleDeleteComment(comment.id)}
+                                      className="hover:text-rose-600 flex items-center gap-0.5 transition-colors cursor-pointer border-none bg-transparent p-0 font-bold"
+                                    >
+                                      <Trash2 className="h-2.5 w-2.5" />
+                                      <span>Delete</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 

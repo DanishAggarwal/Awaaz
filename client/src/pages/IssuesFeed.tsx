@@ -19,7 +19,7 @@ import {
 
 interface IssuesFeedProps {
   joinedGroups: any[];
-  onViewIssue: (issueId: string) => void;
+  onViewIssue: (issueId: string, scrollToComments?: boolean) => void;
   onReportIssue: (groupId?: string | null) => void;
   initialGroupId?: string | null;
 }
@@ -321,7 +321,16 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
                             <span>by {issue.authorName || "Citizen"}</span>
                           </div>
                           <span className="inline-flex items-center gap-1 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-2 py-0.5 rounded-full text-[9px] font-bold">
-                            👍 {issue.endorsementCount || 0} Endorsements
+                            👍 {issue.endorsementCount || 0}
+                          </span>
+                          <span 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewIssue(issue.id, true);
+                            }}
+                            className="inline-flex items-center gap-1 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] hover:bg-[#F5F5F0] transition-colors px-2 py-0.5 rounded-full text-[9px] font-bold cursor-pointer"
+                          >
+                            💬 {issue.commentCount || 0}
                           </span>
                         </div>
                         

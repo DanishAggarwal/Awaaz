@@ -164,3 +164,44 @@ export async function endorseIssue(id) {
   });
 }
 
+/**
+ * Public/Protected: Get comments of a civic issue.
+ * Matches GET /api/issues/:id/comments
+ */
+export async function getComments(issueId) {
+  return apiRequest(`/issues/${issueId}/comments`);
+}
+
+/**
+ * Protected: Create a comment on a civic issue.
+ * Matches POST /api/issues/:id/comments
+ */
+export async function createComment(issueId, body) {
+  return apiRequest(`/issues/${issueId}/comments`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Protected: Edit an existing comment.
+ * Matches PATCH /api/issues/:id/comments/:commentId
+ */
+export async function updateComment(issueId, commentId, body) {
+  return apiRequest(`/issues/${issueId}/comments/${commentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Protected: Delete an existing comment.
+ * Matches DELETE /api/issues/:id/comments/:commentId
+ */
+export async function deleteComment(issueId, commentId) {
+  return apiRequest(`/issues/${issueId}/comments/${commentId}`, {
+    method: "DELETE"
+  });
+}
+
+

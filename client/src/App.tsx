@@ -92,6 +92,7 @@ function MainDashboard() {
   // Groups and roles state management
   const [activeGroupId, setActiveGroupId] = useState<string | null>(getInitialGroupId);
   const [activeIssueId, setActiveIssueId] = useState<string | null>(getInitialIssueId);
+  const [scrollToComments, setScrollToComments] = useState<boolean>(false);
   const [joinedGroups, setJoinedGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [isAppCreateModalOpen, setIsAppCreateModalOpen] = useState(false);
@@ -564,8 +565,9 @@ function MainDashboard() {
                 setActiveGroupId(groupId);
                 setActiveTab("report_issue");
               }}
-              onViewIssue={(issueId) => {
+              onViewIssue={(issueId, scrollComments) => {
                 setActiveIssueId(issueId);
+                setScrollToComments(!!scrollComments);
                 setActiveTab("issue_detail");
               }}
             />
@@ -579,6 +581,7 @@ function MainDashboard() {
                   type: "success"
                 });
                 setActiveIssueId(newIssue.id);
+                setScrollToComments(false);
                 setActiveTab("issue_detail");
               }}
               onCancel={() => {
@@ -592,21 +595,25 @@ function MainDashboard() {
           ) : activeTab === "issue_detail" && activeIssueId ? (
             <IssueDetail
               issueId={activeIssueId}
+              scrollToComments={scrollToComments}
               onBack={() => {
                 setActiveTab("feed");
                 setActiveIssueId(null);
+                setScrollToComments(false);
               }}
               onViewGroup={(id) => {
                 setActiveGroupId(id);
                 setActiveTab("group_detail");
+                setScrollToComments(false);
               }}
             />
           ) : activeTab === "nearby" ? (
             <NearbyIssues />
           ) : activeTab === "reports" ? (
             <MyReports 
-              onViewIssue={(issueId) => {
+              onViewIssue={(issueId, scrollComments) => {
                 setActiveIssueId(issueId);
+                setScrollToComments(!!scrollComments);
                 setActiveTab("issue_detail");
               }}
             />
@@ -615,8 +622,9 @@ function MainDashboard() {
           ) : (
             <IssuesFeed
               joinedGroups={joinedGroups}
-              onViewIssue={(issueId) => {
+              onViewIssue={(issueId, scrollComments) => {
                 setActiveIssueId(issueId);
+                setScrollToComments(!!scrollComments);
                 setActiveTab("issue_detail");
               }}
               onReportIssue={(groupId) => {

@@ -437,4 +437,280 @@ router.post("/:id/endorse", verifyToken, async (req: AuthenticatedRequest, res: 
   }
 });
 
+/**
+ * GET /api/issues/:id/comments
+ * Retrieve all comments for a specific issue.
+ */
+router.get("/:id/comments", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const issueId = req.params.id;
+    const issueDoc = await db.collection("issues").doc(issueId).get();
+
+    if (!issueDoc.exists) {
+      res.status(404).json({
+        success: false,
+        error: "Issue not found."
+      });
+      return;
+    }
+
+    const commentsSnapshot = await db
+      .collection("issues")
+      .doc(issueId)
+      .collection("comments")
+      .orderBy("createdAt", "desc")
+      .get();
+
+    const comments: any[] = [];
+    commentsSnapshot.forEach((doc) => {
+      const data = doc.data();
+      const createdAtStr = data.createdAt && typeof data.createdAt.toDate === "function"
+        ? data.createdAt.toDate().toISOString()
+        : (data.createdAt || new Date().toISOString());
+
+      const updatedAtStr = data.updatedAt && typeof data.updatedAt.toDate === "function"
+        ? data.updatedAt.toDate().toISOString()
+        : (data.updatedAt || null);
+
+      comments.push({
+        id: doc.id,
+        ...data,
+        createdAt: createdAtStr,
+        updatedAt: updatedAtStr
+      });
+    });
+
+    res.json({
+      success: true,
+      data: { comments }
+    });
+  } catch (error: any) {
+    console.error("Error getting comments:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to retrieve comments."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/comments
+ * Create a new comment on a specific issue.
+ * Uses a single Firestore transaction to create comment and increment commentCount.
+ */
+router.post("/:id/comments", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const displayName = req.user?.name || "Citizen";
+    const photoURL = req.user?.picture || "";
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      res.status(400).json({ success: false, error: "Comment text is required." });
+      return;
+    }
+
+    const trimmedText = text.trim();
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const commentRef = issueRef.collection("comments").doc();
+
+    const newCommentData = {
+      id: commentRef.id,
+      uid,
+      displayName,
+      photoURL,
+      text: trimmedText,
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+      isEdited: false
+    };
+
+    await db.runTransaction(async (transaction) => {
+      const issueDoc = await transaction.get(issueRef);
+      if (!issueDoc.exists) {
+        const err = new Error("Issue not found.");
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      const issueData = issueDoc.data() || {};
+      const currentCount = issueData.commentCount || 0;
+
+      transaction.set(commentRef, {
+        uid,
+        displayName,
+        photoURL,
+        text: trimmedText,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: null,
+        isEdited: false
+      });
+
+      transaction.update(issueRef, {
+        commentCount: currentCount + 1,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        comment: newCommentData
+      }
+    });
+  } catch (error: any) {
+    console.error("Error creating comment:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message || "Failed to create comment."
+    });
+  }
+});
+
+/**
+ * PATCH /api/issues/:id/comments/:commentId
+ * Update an existing comment. Only the original author may edit.
+ */
+router.patch("/:id/comments/:commentId", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+    const commentId = req.params.commentId;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const { text } = req.body;
+    if (!text || !text.trim()) {
+      res.status(400).json({ success: false, error: "Comment text is required." });
+      return;
+    }
+
+    const trimmedText = text.trim();
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const commentRef = issueRef.collection("comments").doc(commentId);
+
+    const issueDoc = await issueRef.get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const commentDoc = await commentRef.get();
+    if (!commentDoc.exists) {
+      res.status(404).json({ success: false, error: "Comment not found." });
+      return;
+    }
+
+    const commentData = commentDoc.data() || {};
+    if (commentData.uid !== uid) {
+      res.status(403).json({ success: false, error: "You are not authorized to edit this comment." });
+      return;
+    }
+
+    await commentRef.update({
+      text: trimmedText,
+      updatedAt: FieldValue.serverTimestamp(),
+      isEdited: true
+    });
+
+    res.json({
+      success: true,
+      data: {
+        comment: {
+          id: commentId,
+          ...commentData,
+          text: trimmedText,
+          isEdited: true,
+          updatedAt: new Date().toISOString()
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error("Error updating comment:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to update comment."
+    });
+  }
+});
+
+/**
+ * DELETE /api/issues/:id/comments/:commentId
+ * Delete an existing comment. Only the original author may delete.
+ * Uses a single Firestore transaction to delete comment and decrement commentCount.
+ */
+router.delete("/:id/comments/:commentId", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+    const commentId = req.params.commentId;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const commentRef = issueRef.collection("comments").doc(commentId);
+
+    await db.runTransaction(async (transaction) => {
+      const issueDoc = await transaction.get(issueRef);
+      if (!issueDoc.exists) {
+        const err = new Error("Issue not found.");
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      const commentDoc = await transaction.get(commentRef);
+      if (!commentDoc.exists) {
+        const err = new Error("Comment not found.");
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      const commentData = commentDoc.data() || {};
+      if (commentData.uid !== uid) {
+        const err = new Error("You are not authorized to delete this comment.");
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
+      const issueData = issueDoc.data() || {};
+      const currentCount = issueData.commentCount || 0;
+
+      transaction.delete(commentRef);
+      transaction.update(issueRef, {
+        commentCount: Math.max(0, currentCount - 1),
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        message: "Comment deleted successfully."
+      }
+    });
+  } catch (error: any) {
+    console.error("Error deleting comment:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error.message || "Failed to delete comment."
+    });
+  }
+});
+
 export default router;

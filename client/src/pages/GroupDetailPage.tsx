@@ -24,7 +24,7 @@ interface GroupDetailPageProps {
   onJoinGroup: (groupId: string) => Promise<void>;
   onBack: () => void;
   onReportIssue?: (groupId: string) => void;
-  onViewIssue?: (issueId: string) => void;
+  onViewIssue?: (issueId: string, scrollToComments?: boolean) => void;
 }
 
 export default function GroupDetailPage({ 
@@ -359,6 +359,15 @@ export default function GroupDetailPage({
                             <div className="flex items-center gap-2">
                               <span className="inline-flex items-center gap-0.5 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8]/80 px-1.5 py-0.2 rounded-full text-[8px] font-bold">
                                 👍 {issue.endorsementCount || 0}
+                              </span>
+                              <span 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onViewIssue && onViewIssue(issue.id, true);
+                                }}
+                                className="inline-flex items-center gap-0.5 text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8]/80 hover:bg-[#F5F5F0] transition-colors px-1.5 py-0.2 rounded-full text-[8px] font-bold cursor-pointer"
+                              >
+                                💬 {issue.commentCount || 0}
                               </span>
                               <span className="shrink-0 flex items-center gap-1">
                                 <Clock className="h-2.5 w-2.5" />
