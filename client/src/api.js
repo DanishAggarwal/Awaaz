@@ -118,3 +118,39 @@ export async function getMyRole(groupId) {
 export async function getGroupMembers(groupId) {
   return apiRequest(`/groups/${groupId}/members`);
 }
+
+/**
+ * Protected: Create a new civic issue.
+ * Matches POST /api/issues
+ */
+export async function createIssue(body) {
+  return apiRequest("/issues", {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+/**
+ * Protected: Get a specific issue by ID.
+ * Matches GET /api/issues/:id
+ */
+export async function getIssue(id) {
+  return apiRequest(`/issues/${id}`);
+}
+
+/**
+ * Protected: Get list of issues matching scope and/or groupId.
+ * Matches GET /api/issues
+ */
+export async function getIssues(params = {}) {
+  const queryParts = [];
+  if (params.scope) {
+    queryParts.push(`scope=${encodeURIComponent(params.scope)}`);
+  }
+  if (params.groupId) {
+    queryParts.push(`groupId=${encodeURIComponent(params.groupId)}`);
+  }
+  const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
+  return apiRequest(`/issues${queryString}`);
+}
+

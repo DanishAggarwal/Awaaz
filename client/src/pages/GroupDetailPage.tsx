@@ -19,9 +19,10 @@ interface GroupDetailPageProps {
   joinedGroupIds: string[];
   onJoinGroup: (groupId: string) => Promise<void>;
   onBack: () => void;
+  onReportIssue?: (groupId: string) => void;
 }
 
-export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, onBack }: GroupDetailPageProps) {
+export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, onBack, onReportIssue }: GroupDetailPageProps) {
   const [group, setGroup] = useState<any>(null);
   const [role, setRole] = useState<"admin" | "member" | null>(null);
   const [members, setMembers] = useState<any[]>([]);
@@ -133,17 +134,27 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
         </button>
 
         <div className="flex items-center gap-3">
+          {isJoined && (
+            <button
+              onClick={() => onReportIssue && onReportIssue(groupId)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#5A5A40] text-white hover:bg-[#4A4A3A] transition-colors rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Report Community Issue</span>
+            </button>
+          )}
+
           {isJoined ? (
             <div className="flex items-center gap-1.5 bg-[#F5F5F0] px-3 py-1.5 rounded-full border border-[#E5E0D8] text-xs font-semibold text-[#5A5A40]" id="role-badge">
               {role === "admin" ? (
                 <>
                   <Shield className="h-3.5 w-3.5 text-[#A37B5C]" />
-                  <span>Admin Role</span>
+                  <span className="hidden sm:inline">Admin Role</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  <span>Member</span>
+                  <span className="hidden sm:inline">Member</span>
                 </>
               )}
             </div>
@@ -243,7 +254,10 @@ export default function GroupDetailPage({ groupId, joinedGroupIds, onJoinGroup, 
               <div className="space-y-4 py-2 text-center text-[#7A756D]" id="placeholder-issues">
                 <p className="text-xs italic">There are no active complaints filed under this community group yet.</p>
                 {isJoined ? (
-                  <button className="inline-flex items-center gap-1.5 text-xs text-[#5A5A40] hover:underline font-bold py-1 px-3 bg-[#F5F5F0] rounded-lg border border-[#E5E0D8]/50">
+                  <button 
+                    onClick={() => onReportIssue && onReportIssue(groupId)}
+                    className="inline-flex items-center gap-1.5 text-xs text-[#5A5A40] hover:underline font-bold py-1 px-3 bg-[#F5F5F0] rounded-lg border border-[#E5E0D8]/50 cursor-pointer"
+                  >
                     <Plus className="h-3 w-3" />
                     <span>File First Community Issue</span>
                   </button>

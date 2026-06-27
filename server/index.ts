@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import feedRouter from "./routes/feed";
 import authRouter from "./routes/auth";
 import groupsRouter from "./routes/groups";
+import issuesRouter from "./routes/issues";
 
 async function startServer() {
   const app = express();
@@ -30,6 +31,7 @@ async function startServer() {
   app.use("/api/feed", feedRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/groups", groupsRouter);
+  app.use("/api/issues", issuesRouter);
 
   // Configure Vite Middleware for SPA Frontend
   if (process.env.NODE_ENV !== "production") {

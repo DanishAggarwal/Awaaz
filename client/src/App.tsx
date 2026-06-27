@@ -26,6 +26,10 @@ import { getRisingIssues, getGroups, joinGroup } from "./api";
 import GroupsPage from "./pages/GroupsPage";
 import GroupDetailPage from "./pages/GroupDetailPage";
 import CreateGroupModal from "./components/groups/CreateGroupModal";
+import IssuesFeed from "./pages/IssuesFeed";
+import ReportIssue from "./pages/ReportIssue";
+import IssueDetail from "./pages/IssueDetail";
+import { NearbyIssues, MyReports, NotificationsPage } from "./pages/PlaceholderPages";
 
 // Define TypeScript structures
 interface Issue {
@@ -64,8 +68,8 @@ function MainDashboard() {
   const getInitialTab = () => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("tab");
-    if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail"].includes(tab)) {
-      return tab as "feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail";
+    if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail", "report_issue", "issue_detail"].includes(tab)) {
+      return tab as "feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail" | "report_issue" | "issue_detail";
     }
     return "feed";
   };
@@ -75,13 +79,19 @@ function MainDashboard() {
     return params.get("groupId");
   };
 
-  const [activeTab, setActiveTab] = useState<"feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail">(getInitialTab);
+  const getInitialIssueId = () => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("issueId");
+  };
+
+  const [activeTab, setActiveTab] = useState<"feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail" | "report_issue" | "issue_detail">(getInitialTab);
   const [activeFilter, setActiveFilter] = useState<"all" | "groups" | "public">("all");
   const [apiIssues, setApiIssues] = useState<Issue[]>([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
 
   // Groups and roles state management
   const [activeGroupId, setActiveGroupId] = useState<string | null>(getInitialGroupId);
+  const [activeIssueId, setActiveIssueId] = useState<string | null>(getInitialIssueId);
   const [joinedGroups, setJoinedGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [isAppCreateModalOpen, setIsAppCreateModalOpen] = useState(false);
@@ -95,14 +105,21 @@ function MainDashboard() {
     }
   }, [toast]);
 
-  // Sync tab/group state changes to URL query parameters
+  // Sync tab/group/issue state changes to URL query parameters
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     params.set("tab", activeTab);
+    
     if (activeTab === "group_detail" && activeGroupId) {
       params.set("groupId", activeGroupId);
     } else {
       params.delete("groupId");
+    }
+
+    if (activeTab === "issue_detail" && activeIssueId) {
+      params.set("issueId", activeIssueId);
+    } else {
+      params.delete("issueId");
     }
     
     const newSearch = params.toString();
@@ -110,21 +127,23 @@ function MainDashboard() {
     if (newSearch !== currentSearch) {
       window.history.pushState(null, "", `?${newSearch}`);
     }
-  }, [activeTab, activeGroupId]);
+  }, [activeTab, activeGroupId, activeIssueId]);
 
-  // Listen to browser back/forward (popstate) to keep tab and groupId state fully in-sync
+  // Listen to browser back/forward (popstate) to keep tab, groupId, and issueId state fully in-sync
   useEffect(() => {
     const handlePopState = () => {
       const params = new URLSearchParams(window.location.search);
       const tab = params.get("tab");
       const groupId = params.get("groupId");
+      const issueId = params.get("issueId");
 
-      if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail"].includes(tab)) {
+      if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail", "report_issue", "issue_detail"].includes(tab)) {
         setActiveTab(tab as any);
       } else {
         setActiveTab("feed");
       }
       setActiveGroupId(groupId);
+      setActiveIssueId(issueId);
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -341,8 +360,9 @@ function MainDashboard() {
                 onClick={() => {
                   setActiveTab("feed");
                   setActiveGroupId(null);
+                  setActiveIssueId(null);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "feed" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${["feed", "issue_detail", "report_issue"].includes(activeTab) ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
               >
                 <Flame className="h-4.5 w-4.5" />
                 <span>Issue Feed</span>
@@ -540,135 +560,67 @@ function MainDashboard() {
                 setActiveTab("groups");
                 setActiveGroupId(null);
               }}
+              onReportIssue={(groupId) => {
+                setActiveGroupId(groupId);
+                setActiveTab("report_issue");
+              }}
             />
+          ) : activeTab === "report_issue" ? (
+            <ReportIssue
+              joinedGroups={joinedGroups}
+              initialGroupId={activeGroupId}
+              onSuccess={(newIssue) => {
+                setToast({
+                  message: `Civic issue filed successfully! Deterministic Priority Score: ${newIssue.priorityScore}`,
+                  type: "success"
+                });
+                setActiveIssueId(newIssue.id);
+                setActiveTab("issue_detail");
+              }}
+              onCancel={() => {
+                if (activeGroupId) {
+                  setActiveTab("group_detail");
+                } else {
+                  setActiveTab("feed");
+                }
+              }}
+            />
+          ) : activeTab === "issue_detail" && activeIssueId ? (
+            <IssueDetail
+              issueId={activeIssueId}
+              onBack={() => {
+                setActiveTab("feed");
+                setActiveIssueId(null);
+              }}
+              onViewGroup={(id) => {
+                setActiveGroupId(id);
+                setActiveTab("group_detail");
+              }}
+            />
+          ) : activeTab === "nearby" ? (
+            <NearbyIssues />
+          ) : activeTab === "reports" ? (
+            <MyReports 
+              onViewIssue={(issueId) => {
+                setActiveIssueId(issueId);
+                setActiveTab("issue_detail");
+              }}
+            />
+          ) : activeTab === "notifications" ? (
+            <NotificationsPage />
           ) : (
-            <>
-              {/* Feed Header */}
-              <header className="border-b border-[#E5E0D8] bg-white/80 backdrop-blur-md p-5 sticky top-0 z-10 flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold tracking-tight text-[#1A1A1A] font-serif">
-                    {activeTab === "feed" && "Awaaz Feed"}
-                    {activeTab === "nearby" && "Nearby Issues"}
-                    {activeTab === "reports" && "My Reports"}
-                    {activeTab === "notifications" && "Notifications"}
-                  </h2>
-                  <p className="text-xs text-[#7A756D]">
-                    {activeTab === "feed" && "Hyperpure community-verified civic complaints"}
-                    {activeTab === "nearby" && "Issues reported within your immediate sector"}
-                    {activeTab === "reports" && "Complaints filed and tracked by you"}
-                    {activeTab === "notifications" && "Alerts on verifications, endorsements and resolution proofs"}
-                  </p>
-                </div>
-                
-                {/* Filter Pills */}
-                {activeTab === "feed" && (
-                  <div className="flex gap-1.5 bg-[#F5F5F0] p-1 rounded-full border border-[#E5E0D8]">
-                    <button
-                      onClick={() => setActiveFilter("all")}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "all" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-                    >
-                      All
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("groups")}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "groups" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-                    >
-                      My Groups
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("public")}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "public" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-                    >
-                      Public
-                    </button>
-                  </div>
-                )}
-              </header>
-
-              {/* Issue Cards Feed */}
-              <section className="p-6 space-y-6 overflow-y-auto flex-grow font-sans" aria-label="Civic Issues list">
-                {loadingIssues ? (
-                  <div className="flex justify-center py-12">
-                    <span className="text-[#7A756D] text-sm flex items-center gap-2">
-                      <span className="h-4 w-4 rounded-full border-2 border-[#5A5A40] border-t-transparent animate-spin"></span>
-                      Retrieving live signal issues...
-                    </span>
-                  </div>
-                ) : filteredIssues.length === 0 ? (
-                  <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-[#E5E0D8] p-6">
-                    <AlertTriangle className="h-8 w-8 mx-auto text-[#A8A297] mb-2" />
-                    <p className="text-sm font-semibold text-[#7A756D]">No issues match this filter</p>
-                    <p className="text-xs text-[#A8A297] mt-1">Be the first to file an issue for your locality!</p>
-                  </div>
-                ) : (
-                  filteredIssues.map((issue) => (
-                    <article
-                      key={issue.id}
-                      className="rounded-2xl border border-[#E5E0D8] bg-white p-6 hover:border-[#5A5A40]/30 transition-all shadow-xs relative"
-                    >
-                      {/* Category, Status & Priority Score Row */}
-                      <div className="flex items-start justify-between gap-4 mb-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center rounded-md bg-[#F5F5F0] px-2.5 py-1 text-xs font-bold text-[#5A5A40] uppercase tracking-wider font-mono border border-[#E5E0D8]">
-                            {issue.aiCategory}
-                          </span>
-                          {getSeverityBadge(issue.aiSeverity)}
-                          {getStatusBadge(issue.status)}
-                        </div>
-                        
-                        {/* Priority score indicator with Flame */}
-                        <div className="flex items-center gap-1.5 bg-[#FAF9F6] px-2.5 py-1 rounded-xl border border-[#E5E0D8] text-[#5A5A40]" title="Priority Score">
-                          <Flame className="h-4 w-4 fill-[#A37B5C] text-[#A37B5C]" />
-                          <span className="text-xs font-bold font-mono">{issue.priorityScore}</span>
-                        </div>
-                      </div>
-
-                      {/* Group Name & Reporter Meta */}
-                      <div className="text-xs text-[#A8A297] mb-3 flex items-center gap-2 flex-wrap font-medium">
-                        <span className="font-bold text-[#5A5A40]">{issue.groupName || "Public Initiative"}</span>
-                        <span>•</span>
-                        <span>Reported by {issue.reporterName}</span>
-                        <span>•</span>
-                        <span>{new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
-                      </div>
-
-                      {/* Summary/Description */}
-                      <h3 className="text-lg font-bold text-[#1A1A1A] mb-2 font-serif tracking-tight leading-snug">
-                        {issue.aiSummary}
-                      </h3>
-                      <p className="text-sm text-[#4A4A3A] leading-relaxed mb-4">
-                        {issue.description}
-                      </p>
-
-                      {/* Address / Location Row */}
-                      <div className="flex items-center gap-1.5 text-xs text-[#7A756D] mb-5 bg-[#FDFCFB] p-3 rounded-xl border border-[#E5E0D8]">
-                        <MapPin className="h-3.5 w-3.5 text-[#A8A297] shrink-0" />
-                        <span className="truncate">{issue.location.address}</span>
-                      </div>
-
-                      {/* Action/Interactions Row */}
-                      <div className="flex items-center justify-between border-t border-[#F5F5F0] pt-4 text-xs">
-                        <div className="flex items-center gap-4">
-                          <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
-                            <ThumbsUp className="h-4 w-4" />
-                            <span>Endorse ({issue.endorsementCount})</span>
-                          </button>
-                          <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
-                            <MessageSquare className="h-4 w-4" />
-                            <span>Discuss</span>
-                          </button>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 text-[#A37B5C] font-semibold bg-[#F5F5F0]/40 px-2.5 py-1 rounded-md border border-[#E5E0D8]/40">
-                          <Sparkles className="h-3.5 w-3.5" />
-                          <span>Issue DNA Audit</span>
-                        </div>
-                      </div>
-                    </article>
-                  ))
-                )}
-              </section>
-            </>
+            <IssuesFeed
+              joinedGroups={joinedGroups}
+              onViewIssue={(issueId) => {
+                setActiveIssueId(issueId);
+                setActiveTab("issue_detail");
+              }}
+              onReportIssue={(groupId) => {
+                setActiveGroupId(groupId);
+                setActiveTab("report_issue");
+              }}
+              initialGroupId={activeGroupId}
+            />
           )}
         </main>
 
