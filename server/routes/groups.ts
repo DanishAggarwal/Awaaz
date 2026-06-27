@@ -15,13 +15,8 @@ router.get("/", async (req: Request, res: Response) => {
     const type = req.query.type as string | undefined;
     const search = req.query.search as string | undefined;
 
-    let query: any = db.collection("groups");
-
-    if (type) {
-      query = query.where("type", "==", type);
-    }
-
-    const snapshot = await query.get();
+    // Fetch all groups to ensure highly consistent and resilient category and search matching
+    const snapshot = await db.collection("groups").get();
     let groups: any[] = [];
 
     snapshot.forEach((doc: any) => {
@@ -36,6 +31,14 @@ router.get("/", async (req: Request, res: Response) => {
         createdAt: createdAtClient
       });
     });
+
+    // Apply in-memory type filter if provided (case-insensitive and trimmed)
+    if (type) {
+      const typeStr = type.toLowerCase().trim();
+      groups = groups.filter((g) => 
+        g.type && g.type.toLowerCase().trim() === typeStr
+      );
+    }
 
     // Apply in-memory search filter if provided
     if (search) {
@@ -291,6 +294,87 @@ router.get("/:id/my-role", verifyToken, async (req: AuthenticatedRequest, res: R
     res.status(500).json({
       success: false,
       error: error.message || "Failed to retrieve group role"
+    });
+  }
+});
+
+/**
+ * GET /api/groups/:id/members
+ * Public/Protected endpoint to retrieve group members with user details.
+ */
+router.get("/:id/members", async (req: Request, res: Response) => {
+  try {
+    const groupId = req.params.id;
+
+    // Fetch all members of this group
+    const membersSnapshot = await db.collection("group_members")
+      .where("groupId", "==", groupId)
+      .get();
+
+    const membersList: any[] = [];
+    const userIds: string[] = [];
+
+    membersSnapshot.forEach((doc) => {
+      const data = doc.data();
+      membersList.push({
+        uid: data.uid,
+        role: data.role || "member",
+        joinedAt: data.joinedAt
+      });
+      if (data.uid) {
+        userIds.push(data.uid);
+      }
+    });
+
+    if (userIds.length === 0) {
+      res.json({ success: true, data: { members: [] } });
+      return;
+    }
+
+    // Since we want to join with user info, we can fetch users by ID.
+    const userDocsPromises: Promise<any>[] = [];
+    const uniqueUserIds = Array.from(new Set(userIds));
+
+    // Chunk size 30 for Firestore 'in' query
+    const chunkSize = 30;
+    for (let i = 0; i < uniqueUserIds.length; i += chunkSize) {
+      const chunk = uniqueUserIds.slice(i, i + chunkSize);
+      userDocsPromises.push(
+        db.collection("users").where("__name__", "in", chunk).get()
+      );
+    }
+
+    const userSnapshots = await Promise.all(userDocsPromises);
+    const userMap: Record<string, any> = {};
+
+    userSnapshots.forEach((snapshot) => {
+      snapshot.forEach((doc: any) => {
+        userMap[doc.id] = doc.data();
+      });
+    });
+
+    const membersWithUserInfo = membersList.map((m) => {
+      const uData = userMap[m.uid] || {};
+      return {
+        uid: m.uid,
+        role: m.role, // "admin" or "member"
+        displayName: uData.displayName || "Anonymous Citizen",
+        photoURL: uData.photoURL || null,
+        email: uData.email || ""
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        members: membersWithUserInfo
+      }
+    });
+  } catch (error: any) {
+    console.error("Error retrieving group members:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to retrieve group members"
     });
   }
 });

@@ -110,3 +110,11 @@ export async function joinGroup(id) {
 export async function getMyRole(groupId) {
   return apiRequest(`/groups/${groupId}/my-role`);
 }
+
+/**
+ * Public/Protected: Get members of a community group.
+ * Matches GET /api/groups/:id/members
+ */
+export async function getGroupMembers(groupId) {
+  return apiRequest(`/groups/${groupId}/members`);
+}

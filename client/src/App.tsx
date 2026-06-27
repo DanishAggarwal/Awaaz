@@ -18,9 +18,14 @@ import {
   Sparkles,
   ChevronRight,
   Shield,
-  Layers
+  Layers,
+  Loader2,
+  Plus
 } from "lucide-react";
-import { getRisingIssues } from "./api";
+import { getRisingIssues, getGroups, joinGroup } from "./api";
+import GroupsPage from "./pages/GroupsPage";
+import GroupDetailPage from "./pages/GroupDetailPage";
+import CreateGroupModal from "./components/groups/CreateGroupModal";
 
 // Define TypeScript structures
 interface Issue {
@@ -53,11 +58,146 @@ export default function App() {
 }
 
 function MainDashboard() {
-  const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<"feed" | "nearby" | "reports" | "notifications">("feed");
+  const { user, logout, refreshUser } = useAuth();
+
+  // Helper to parse initial state from URL query parameters (for bookmarks and refresh resilience)
+  const getInitialTab = () => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail"].includes(tab)) {
+      return tab as "feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail";
+    }
+    return "feed";
+  };
+
+  const getInitialGroupId = () => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("groupId");
+  };
+
+  const [activeTab, setActiveTab] = useState<"feed" | "nearby" | "reports" | "notifications" | "groups" | "group_detail">(getInitialTab);
   const [activeFilter, setActiveFilter] = useState<"all" | "groups" | "public">("all");
   const [apiIssues, setApiIssues] = useState<Issue[]>([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
+
+  // Groups and roles state management
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(getInitialGroupId);
+  const [joinedGroups, setJoinedGroups] = useState<any[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [isAppCreateModalOpen, setIsAppCreateModalOpen] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  // Sync tab/group state changes to URL query parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", activeTab);
+    if (activeTab === "group_detail" && activeGroupId) {
+      params.set("groupId", activeGroupId);
+    } else {
+      params.delete("groupId");
+    }
+    
+    const newSearch = params.toString();
+    const currentSearch = window.location.search.replace(/^\?/, "");
+    if (newSearch !== currentSearch) {
+      window.history.pushState(null, "", `?${newSearch}`);
+    }
+  }, [activeTab, activeGroupId]);
+
+  // Listen to browser back/forward (popstate) to keep tab and groupId state fully in-sync
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      const groupId = params.get("groupId");
+
+      if (tab && ["feed", "nearby", "reports", "notifications", "groups", "group_detail"].includes(tab)) {
+        setActiveTab(tab as any);
+      } else {
+        setActiveTab("feed");
+      }
+      setActiveGroupId(groupId);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Load user's joined groups from the server
+  const loadJoinedGroups = React.useCallback(async () => {
+    if (!user) return;
+    try {
+      setLoadingGroups(true);
+      const res = await getGroups();
+      if (res && res.success && res.data && res.data.groups) {
+        const userGroupIds = user.groupIds || [];
+        const joined = res.data.groups.filter((g: any) => userGroupIds.includes(g.id));
+        setJoinedGroups(joined);
+      }
+    } catch (err) {
+      console.error("Error loading joined groups:", err);
+    } finally {
+      setLoadingGroups(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    loadJoinedGroups();
+  }, [user, loadJoinedGroups]);
+
+  // Handle joining a community group at app-level (syncs user context & re-fetches joined list)
+  const handleJoinGroupAtAppLevel = async (groupId: string) => {
+    try {
+      const res = await joinGroup(groupId);
+      if (res && res.success) {
+        if (refreshUser) {
+          await refreshUser();
+        }
+        await loadJoinedGroups();
+        setToast({
+          message: "Successfully joined the community!",
+          type: "success"
+        });
+      } else {
+        const errMsg = res?.error || "Failed to join community group.";
+        setToast({ message: errMsg, type: "error" });
+        throw new Error(errMsg);
+      }
+    } catch (err: any) {
+      const errMsg = err.message || "Failed to join community group.";
+      setToast({ message: errMsg, type: "error" });
+      throw err;
+    }
+  };
+
+  const handleAppCreateSuccess = async (newGroup: any) => {
+    try {
+      setToast({
+        message: `Successfully established community "${newGroup.name}"!`,
+        type: "success"
+      });
+
+      if (refreshUser) {
+        await refreshUser();
+      }
+      await loadJoinedGroups();
+
+      if (newGroup && newGroup.id) {
+        setActiveGroupId(newGroup.id);
+        setActiveTab("group_detail");
+      }
+    } catch (err: any) {
+      console.error("Failed to refresh on group creation:", err);
+    }
+  };
 
   // 3 Hardcoded issues as fallback and standard view
   const hardcodedIssues: Issue[] = [
@@ -198,61 +338,146 @@ function MainDashboard() {
             {/* Navigation Menu */}
             <nav className="space-y-1" aria-label="Main Navigation">
               <button 
-                onClick={() => setActiveTab("feed")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${activeTab === "feed" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+                onClick={() => {
+                  setActiveTab("feed");
+                  setActiveGroupId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "feed" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
               >
                 <Flame className="h-4.5 w-4.5" />
                 <span>Issue Feed</span>
               </button>
               <button 
-                onClick={() => setActiveTab("nearby")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${activeTab === "nearby" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+                onClick={() => {
+                  setActiveTab("nearby");
+                  setActiveGroupId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "nearby" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
               >
                 <MapPin className="h-4.5 w-4.5" />
                 <span>Nearby Issues</span>
               </button>
               <button 
-                onClick={() => setActiveTab("reports")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${activeTab === "reports" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+                onClick={() => {
+                  setActiveTab("groups");
+                  setActiveGroupId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "groups" || activeTab === "group_detail" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+              >
+                <Users className="h-4.5 w-4.5" />
+                <span>Communities</span>
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveTab("reports");
+                  setActiveGroupId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "reports" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
               >
                 <CheckCircle2 className="h-4.5 w-4.5" />
                 <span>My Reports</span>
               </button>
               <button 
-                onClick={() => setActiveTab("notifications")}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors ${activeTab === "notifications" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
+                onClick={() => {
+                  setActiveTab("notifications");
+                  setActiveGroupId(null);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${activeTab === "notifications" ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#7A756D] hover:bg-[#F5F5F0]/60 hover:text-[#5A5A40]"}`}
               >
                 <Bell className="h-4.5 w-4.5" />
                 <span>Notifications</span>
               </button>
             </nav>
 
-            {/* Groups Section with Placeholders */}
+            {/* Groups Section */}
             <div className="mt-8">
               <div className="flex items-center justify-between px-2 mb-3">
                 <span className="text-xs font-bold uppercase tracking-widest text-[#A8A297]">My Groups</span>
-                <span className="text-[10px] font-mono text-[#5A5A40] bg-[#F5F5F0] px-1.5 py-0.5 rounded-full font-bold">3</span>
+                <span className="text-[10px] font-mono text-[#5A5A40] bg-[#F5F5F0] px-1.5 py-0.5 rounded-full font-bold">
+                  {joinedGroups.length}
+                </span>
               </div>
-              <ul className="space-y-1 text-xs" aria-label="Joined Groups">
-                <li>
-                  <button className="w-full text-left px-3 py-2 text-[#4A4A3A] hover:bg-[#F5F5F0] rounded-lg flex items-center gap-2.5 transition-colors font-medium">
-                    <div className="w-2 h-2 rounded-full bg-[#8A8A6F] shrink-0"></div>
-                    <span className="truncate">Sector 12 RWA</span>
-                  </button>
-                </li>
-                <li>
-                  <button className="w-full text-left px-3 py-2 text-[#4A4A3A] hover:bg-[#F5F5F0] rounded-lg flex items-center gap-2.5 transition-colors font-medium">
-                    <div className="w-2 h-2 rounded-full bg-[#A37B5C] shrink-0"></div>
-                    <span className="truncate">Indiranagar Civic Forum</span>
-                  </button>
-                </li>
-                <li>
-                  <button className="w-full text-left px-3 py-2 text-[#4A4A3A] hover:bg-[#F5F5F0] rounded-lg flex items-center gap-2.5 transition-colors font-medium">
-                    <div className="w-2 h-2 rounded-full bg-[#6B8E8E] shrink-0"></div>
-                    <span className="truncate">Road Safety Initiative</span>
-                  </button>
-                </li>
-              </ul>
+              
+              {loadingGroups ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-[#5A5A40]/70" />
+                </div>
+              ) : joinedGroups.length === 0 ? (
+                <div className="px-2 py-1 space-y-2.5">
+                  <p className="text-[11px] text-[#A8A297] italic leading-normal">
+                    You haven't joined any communities yet.
+                  </p>
+                  <div className="space-y-1.5 pt-1">
+                    <button
+                      onClick={() => {
+                        setActiveTab("groups");
+                        setActiveGroupId(null);
+                      }}
+                      id="btn-sidebar-browse-communities"
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-[#F5F5F0] hover:bg-[#5A5A40] hover:text-white border border-[#E5E0D8] text-[#5A5A40] text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Compass className="h-3.5 w-3.5" />
+                      <span>Browse Communities</span>
+                    </button>
+                    <button
+                      onClick={() => setIsAppCreateModalOpen(true)}
+                      id="btn-sidebar-create-community"
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[#5A5A40] text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Create Community</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <ul className="space-y-1 text-xs" aria-label="Joined Groups">
+                    {joinedGroups.map((g, idx) => {
+                      const bulletColors = ["bg-[#8A8A6F]", "bg-[#A37B5C]", "bg-[#6B8E8E]", "bg-[#B38F75]", "bg-[#7B8B7B]"];
+                      const isCurrent = activeTab === "group_detail" && activeGroupId === g.id;
+                      return (
+                        <li key={g.id}>
+                          <button 
+                            onClick={() => {
+                              setActiveGroupId(g.id);
+                              setActiveTab("group_detail");
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 transition-colors font-medium cursor-pointer ${
+                              isCurrent ? "bg-[#F5F5F0] text-[#5A5A40]" : "text-[#4A4A3A] hover:bg-[#F5F5F0]"
+                            }`}
+                          >
+                            <div className={`w-2 h-2 rounded-full shrink-0 ${bulletColors[idx % bulletColors.length]}`}></div>
+                            <span className="truncate">{g.name}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  
+                  {/* Small separator beneath the list */}
+                  <div className="border-t border-[#E5E0D8]/60 my-2 pt-2 space-y-1.5 px-1">
+                    <button
+                      onClick={() => {
+                        setActiveTab("groups");
+                        setActiveGroupId(null);
+                      }}
+                      id="btn-sidebar-browse-communities-joined"
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-[#F5F5F0] hover:bg-[#5A5A40] hover:text-white border border-[#E5E0D8] text-[#5A5A40] text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Compass className="h-3.5 w-3.5" />
+                      <span>Browse Communities</span>
+                    </button>
+                    <button
+                      onClick={() => setIsAppCreateModalOpen(true)}
+                      id="btn-sidebar-create-community-joined"
+                      className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[#5A5A40] text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Create Community</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -288,122 +513,163 @@ function MainDashboard() {
         </aside>
 
         {/* ========================================================= */}
-        {/* CENTER FEED                                               */}
+        {/* CENTER FEED / DYNAMIC PAGE VIEW                           */}
         {/* ========================================================= */}
         <main className="flex-grow flex flex-col min-w-0 bg-[#FAF9F6]" id="center-feed">
-          {/* Feed Header */}
-          <header className="border-b border-[#E5E0D8] bg-white/80 backdrop-blur-md p-5 sticky top-0 z-10 flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight text-[#1A1A1A] font-serif">Awaaz Feed</h2>
-              <p className="text-xs text-[#7A756D]">Hyperpure community-verified civic complaints</p>
-            </div>
-            
-            {/* Filter Pills */}
-            <div className="flex gap-1.5 bg-[#F5F5F0] p-1 rounded-full border border-[#E5E0D8]">
-              <button
-                onClick={() => setActiveFilter("all")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all ${activeFilter === "all" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setActiveFilter("groups")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all ${activeFilter === "groups" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-              >
-                My Groups
-              </button>
-              <button
-                onClick={() => setActiveFilter("public")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all ${activeFilter === "public" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
-              >
-                Public
-              </button>
-            </div>
-          </header>
-
-          {/* Issue Cards Feed */}
-          <section className="p-6 space-y-6 overflow-y-auto flex-grow font-sans" aria-label="Civic Issues list">
-            {loadingIssues ? (
-              <div className="flex justify-center py-12">
-                <span className="text-[#7A756D] text-sm flex items-center gap-2">
-                  <span className="h-4 w-4 rounded-full border-2 border-[#5A5A40] border-t-transparent animate-spin"></span>
-                  Retrieving live signal issues...
-                </span>
-              </div>
-            ) : filteredIssues.length === 0 ? (
-              <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-[#E5E0D8] p-6">
-                <AlertTriangle className="h-8 w-8 mx-auto text-[#A8A297] mb-2" />
-                <p className="text-sm font-semibold text-[#7A756D]">No issues match this filter</p>
-                <p className="text-xs text-[#A8A297] mt-1">Be the first to file an issue for your locality!</p>
-              </div>
-            ) : (
-              filteredIssues.map((issue) => (
-                <article
-                  key={issue.id}
-                  className="rounded-2xl border border-[#E5E0D8] bg-white p-6 hover:border-[#5A5A40]/30 transition-all shadow-xs relative"
-                >
-                  {/* Category, Status & Priority Score Row */}
-                  <div className="flex items-start justify-between gap-4 mb-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="inline-flex items-center rounded-md bg-[#F5F5F0] px-2.5 py-1 text-xs font-bold text-[#5A5A40] uppercase tracking-wider font-mono border border-[#E5E0D8]">
-                        {issue.aiCategory}
-                      </span>
-                      {getSeverityBadge(issue.aiSeverity)}
-                      {getStatusBadge(issue.status)}
-                    </div>
-                    
-                    {/* Priority score indicator with Flame */}
-                    <div className="flex items-center gap-1.5 bg-[#FAF9F6] px-2.5 py-1 rounded-xl border border-[#E5E0D8] text-[#5A5A40]" title="Priority Score">
-                      <Flame className="h-4 w-4 fill-[#A37B5C] text-[#A37B5C]" />
-                      <span className="text-xs font-bold font-mono">{issue.priorityScore}</span>
-                    </div>
-                  </div>
-
-                  {/* Group Name & Reporter Meta */}
-                  <div className="text-xs text-[#A8A297] mb-3 flex items-center gap-2 flex-wrap font-medium">
-                    <span className="font-bold text-[#5A5A40]">{issue.groupName || "Public Initiative"}</span>
-                    <span>•</span>
-                    <span>Reported by {issue.reporterName}</span>
-                    <span>•</span>
-                    <span>{new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
-                  </div>
-
-                  {/* Summary/Description */}
-                  <h3 className="text-lg font-bold text-[#1A1A1A] mb-2 font-serif tracking-tight leading-snug">
-                    {issue.aiSummary}
-                  </h3>
-                  <p className="text-sm text-[#4A4A3A] leading-relaxed mb-4">
-                    {issue.description}
+          {activeTab === "groups" ? (
+            <GroupsPage
+              joinedGroupIds={joinedGroups.map(g => g.id)}
+              onJoinGroup={handleJoinGroupAtAppLevel}
+              onViewGroup={(id) => {
+                setActiveGroupId(id);
+                setActiveTab("group_detail");
+              }}
+              onCreateGroup={async (newGroupId) => {
+                if (refreshUser) {
+                  await refreshUser();
+                }
+                await loadJoinedGroups();
+              }}
+            />
+          ) : activeTab === "group_detail" && activeGroupId ? (
+            <GroupDetailPage
+              groupId={activeGroupId}
+              joinedGroupIds={joinedGroups.map(g => g.id)}
+              onJoinGroup={handleJoinGroupAtAppLevel}
+              onBack={() => {
+                setActiveTab("groups");
+                setActiveGroupId(null);
+              }}
+            />
+          ) : (
+            <>
+              {/* Feed Header */}
+              <header className="border-b border-[#E5E0D8] bg-white/80 backdrop-blur-md p-5 sticky top-0 z-10 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight text-[#1A1A1A] font-serif">
+                    {activeTab === "feed" && "Awaaz Feed"}
+                    {activeTab === "nearby" && "Nearby Issues"}
+                    {activeTab === "reports" && "My Reports"}
+                    {activeTab === "notifications" && "Notifications"}
+                  </h2>
+                  <p className="text-xs text-[#7A756D]">
+                    {activeTab === "feed" && "Hyperpure community-verified civic complaints"}
+                    {activeTab === "nearby" && "Issues reported within your immediate sector"}
+                    {activeTab === "reports" && "Complaints filed and tracked by you"}
+                    {activeTab === "notifications" && "Alerts on verifications, endorsements and resolution proofs"}
                   </p>
-
-                  {/* Address / Location Row */}
-                  <div className="flex items-center gap-1.5 text-xs text-[#7A756D] mb-5 bg-[#FDFCFB] p-3 rounded-xl border border-[#E5E0D8]">
-                    <MapPin className="h-3.5 w-3.5 text-[#A8A297] shrink-0" />
-                    <span className="truncate">{issue.location.address}</span>
+                </div>
+                
+                {/* Filter Pills */}
+                {activeTab === "feed" && (
+                  <div className="flex gap-1.5 bg-[#F5F5F0] p-1 rounded-full border border-[#E5E0D8]">
+                    <button
+                      onClick={() => setActiveFilter("all")}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "all" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("groups")}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "groups" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
+                    >
+                      My Groups
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("public")}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${activeFilter === "public" ? "bg-[#5A5A40] text-white shadow-xs" : "text-[#7A756D] hover:text-[#5A5A40]"}`}
+                    >
+                      Public
+                    </button>
                   </div>
+                )}
+              </header>
 
-                  {/* Action/Interactions Row */}
-                  <div className="flex items-center justify-between border-t border-[#F5F5F0] pt-4 text-xs">
-                    <div className="flex items-center gap-4">
-                      <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
-                        <ThumbsUp className="h-4 w-4" />
-                        <span>Endorse ({issue.endorsementCount})</span>
-                      </button>
-                      <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
-                        <MessageSquare className="h-4 w-4" />
-                        <span>Discuss</span>
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-[#A37B5C] font-semibold bg-[#F5F5F0]/40 px-2.5 py-1 rounded-md border border-[#E5E0D8]/40">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Issue DNA Audit</span>
-                    </div>
+              {/* Issue Cards Feed */}
+              <section className="p-6 space-y-6 overflow-y-auto flex-grow font-sans" aria-label="Civic Issues list">
+                {loadingIssues ? (
+                  <div className="flex justify-center py-12">
+                    <span className="text-[#7A756D] text-sm flex items-center gap-2">
+                      <span className="h-4 w-4 rounded-full border-2 border-[#5A5A40] border-t-transparent animate-spin"></span>
+                      Retrieving live signal issues...
+                    </span>
                   </div>
-                </article>
-              ))
-            )}
-          </section>
+                ) : filteredIssues.length === 0 ? (
+                  <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-[#E5E0D8] p-6">
+                    <AlertTriangle className="h-8 w-8 mx-auto text-[#A8A297] mb-2" />
+                    <p className="text-sm font-semibold text-[#7A756D]">No issues match this filter</p>
+                    <p className="text-xs text-[#A8A297] mt-1">Be the first to file an issue for your locality!</p>
+                  </div>
+                ) : (
+                  filteredIssues.map((issue) => (
+                    <article
+                      key={issue.id}
+                      className="rounded-2xl border border-[#E5E0D8] bg-white p-6 hover:border-[#5A5A40]/30 transition-all shadow-xs relative"
+                    >
+                      {/* Category, Status & Priority Score Row */}
+                      <div className="flex items-start justify-between gap-4 mb-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center rounded-md bg-[#F5F5F0] px-2.5 py-1 text-xs font-bold text-[#5A5A40] uppercase tracking-wider font-mono border border-[#E5E0D8]">
+                            {issue.aiCategory}
+                          </span>
+                          {getSeverityBadge(issue.aiSeverity)}
+                          {getStatusBadge(issue.status)}
+                        </div>
+                        
+                        {/* Priority score indicator with Flame */}
+                        <div className="flex items-center gap-1.5 bg-[#FAF9F6] px-2.5 py-1 rounded-xl border border-[#E5E0D8] text-[#5A5A40]" title="Priority Score">
+                          <Flame className="h-4 w-4 fill-[#A37B5C] text-[#A37B5C]" />
+                          <span className="text-xs font-bold font-mono">{issue.priorityScore}</span>
+                        </div>
+                      </div>
+
+                      {/* Group Name & Reporter Meta */}
+                      <div className="text-xs text-[#A8A297] mb-3 flex items-center gap-2 flex-wrap font-medium">
+                        <span className="font-bold text-[#5A5A40]">{issue.groupName || "Public Initiative"}</span>
+                        <span>•</span>
+                        <span>Reported by {issue.reporterName}</span>
+                        <span>•</span>
+                        <span>{new Date(issue.createdAt).toLocaleDateString("en-IN", { day: 'numeric', month: 'short' })}</span>
+                      </div>
+
+                      {/* Summary/Description */}
+                      <h3 className="text-lg font-bold text-[#1A1A1A] mb-2 font-serif tracking-tight leading-snug">
+                        {issue.aiSummary}
+                      </h3>
+                      <p className="text-sm text-[#4A4A3A] leading-relaxed mb-4">
+                        {issue.description}
+                      </p>
+
+                      {/* Address / Location Row */}
+                      <div className="flex items-center gap-1.5 text-xs text-[#7A756D] mb-5 bg-[#FDFCFB] p-3 rounded-xl border border-[#E5E0D8]">
+                        <MapPin className="h-3.5 w-3.5 text-[#A8A297] shrink-0" />
+                        <span className="truncate">{issue.location.address}</span>
+                      </div>
+
+                      {/* Action/Interactions Row */}
+                      <div className="flex items-center justify-between border-t border-[#F5F5F0] pt-4 text-xs">
+                        <div className="flex items-center gap-4">
+                          <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
+                            <ThumbsUp className="h-4 w-4" />
+                            <span>Endorse ({issue.endorsementCount})</span>
+                          </button>
+                          <button className="flex items-center gap-1.5 text-[#7A756D] hover:text-[#5A5A40] font-semibold px-2.5 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors">
+                            <MessageSquare className="h-4 w-4" />
+                            <span>Discuss</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-[#A37B5C] font-semibold bg-[#F5F5F0]/40 px-2.5 py-1 rounded-md border border-[#E5E0D8]/40">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Issue DNA Audit</span>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </section>
+            </>
+          )}
         </main>
 
         {/* ========================================================= */}
@@ -503,6 +769,28 @@ function MainDashboard() {
         </aside>
 
       </div>
+
+      {/* Create Community Modal at App level */}
+      <CreateGroupModal
+        isOpen={isAppCreateModalOpen}
+        onClose={() => setIsAppCreateModalOpen(false)}
+        onSuccess={handleAppCreateSuccess}
+      />
+
+      {/* Global Toast Notification */}
+      {toast && (
+        <div 
+          className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4.5 py-3 rounded-2xl shadow-xl border text-xs font-semibold animate-in fade-in slide-in-from-bottom-5 duration-300 ${
+            toast.type === "success" 
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200/60 animate-bounce-subtle" 
+              : "bg-rose-50 text-rose-800 border-rose-200/60"
+          }`}
+          id="app-global-toast"
+        >
+          <div className={`w-1.5 h-1.5 rounded-full ${toast.type === "success" ? "bg-emerald-500" : "bg-rose-500"} shrink-0 animate-pulse`}></div>
+          <span>{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }

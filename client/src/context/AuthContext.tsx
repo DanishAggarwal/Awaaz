@@ -10,6 +10,7 @@ interface AuthContextType {
   getToken: () => Promise<string | null>;
   signInWithGoogle: () => Promise<any>;
   signOutUser: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -17,6 +18,29 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  const refreshUser = async () => {
+    if (auth.currentUser) {
+      try {
+        const token = await auth.currentUser.getIdToken(true);
+        const response = await fetch("/api/auth/sync", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.data && result.data.user) {
+            setUser(result.data.user);
+          }
+        }
+      } catch (error) {
+        console.error("Error refreshing user in context:", error);
+      }
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -111,7 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logout: signOutUser,    // Alias for backward compatibility
     signInWithGoogle,
     signOutUser,
-    getToken
+    getToken,
+    refreshUser
   };
 
   return (
