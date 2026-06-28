@@ -4,6 +4,7 @@ import { verifyToken, AuthenticatedRequest } from "../middleware/verifyToken";
 import { FieldValue } from "firebase-admin/firestore";
 import { calculatePriorityScore } from "../utils/priority";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
+import { analyzeCivicIssue } from "../agents/ingestionAgent";
 
 const router = Router();
 
@@ -69,11 +70,40 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
       groupName = groupData.name || "Unknown Community";
     }
 
-    // 4. Calculate deterministic priority score
+    // 4. Run Ingestion Agent validation
+    let aiResult;
+    try {
+      const firstImageUrl = imageUrls && imageUrls.length > 0 ? imageUrls[0] : undefined;
+      aiResult = await analyzeCivicIssue({
+        imageUrl: firstImageUrl,
+        description: description.trim()
+      });
+    } catch (err: any) {
+      console.error("AI Intake Ingestion Agent failed:", err);
+      res.status(503).json({
+        success: false,
+        error: "The AI Civic Intake service is temporarily unavailable. Please try again shortly."
+      });
+      return;
+    }
+
+    // Handle invalid civic submission
+    if (!aiResult.validIssue) {
+      res.status(400).json({
+        success: false,
+        error: "This submission does not appear to describe a valid civic issue.",
+        reason: aiResult.rejectionReason || "The uploaded image does not depict a public civic issue."
+      });
+      return;
+    }
+
+    // 5. Calculate priority score including AI severity
     const priorityScore = calculatePriorityScore({
       description,
       imageUrls,
-      location
+      location,
+      endorsementCount: 0,
+      severity: aiResult.severity
     });
 
     const issueRef = db.collection("issues").doc();
@@ -83,6 +113,13 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
       id: issueId,
       groupId,
       groupName,
+      title: aiResult.title,
+      summary: aiResult.summary,
+      category: aiResult.category,
+      severity: aiResult.severity,
+      recommendedDepartment: aiResult.recommendedDepartment,
+      confidence: aiResult.confidence,
+      visualEvidence: aiResult.visualEvidence,
       description: description.trim(),
       imageUrls,
       location: {
@@ -96,7 +133,10 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
       dna: {
         reopenCount: 0,
         duplicateCount: 0,
+        duplicateReports: 0,
         verificationCount: 0,
+        endorsementVelocity: 0,
+        lastPriorityUpdate: FieldValue.serverTimestamp(),
         createdAt: FieldValue.serverTimestamp()
       },
       authorId: uid,
@@ -124,6 +164,7 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
       updatedAt: new Date().toISOString(),
       dna: {
         ...newIssueData.dna,
+        lastPriorityUpdate: new Date().toISOString(),
         createdAt: new Date().toISOString()
       }
     };
@@ -131,7 +172,13 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
     res.status(201).json({
       success: true,
       data: {
-        issue: clientIssue
+        issue: clientIssue,
+        ai: {
+          title: aiResult.title,
+          summary: aiResult.summary,
+          category: aiResult.category,
+          severity: aiResult.severity
+        }
       }
     });
   } catch (error: any) {
@@ -392,9 +439,7 @@ router.post("/:id/endorse", verifyToken, async (req: AuthenticatedRequest, res: 
 
       const issueData = issueDoc.data() || {};
       const updatedIssueDataForPriority = {
-        description: issueData.description || "",
-        imageUrls: issueData.imageUrls || [],
-        location: issueData.location || { latitude: 0, longitude: 0, address: "" },
+        ...issueData,
         endorsementCount: newCount
       };
       const newPriorityScore = calculatePriorityScore(updatedIssueDataForPriority);

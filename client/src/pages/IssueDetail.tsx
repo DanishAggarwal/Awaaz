@@ -446,14 +446,20 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
   return (
     <div className="max-w-4xl mx-auto p-6 font-sans">
       {/* Back Button */}
-      <div className="mb-6">
+      <div className="mb-6 flex flex-col gap-4">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1.5 text-xs font-bold text-[#5A5A40] hover:underline cursor-pointer"
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-[#5A5A40] hover:underline cursor-pointer self-start"
         >
           <ArrowLeft className="h-4 w-4" />
           <span>Back to Feed</span>
         </button>
+
+        {issue.title && (
+          <h1 className="text-xl md:text-2xl font-extrabold tracking-tight text-[#1A1A1A] font-serif mt-2 leading-tight">
+            {issue.title}
+          </h1>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -564,9 +570,23 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
               )}
             </div>
 
-            {/* Description Text */}
+            {/* Description Text / AI Summary */}
+            {issue.summary && (
+              <div className="space-y-2 p-4 bg-[#FAF9F6] border border-[#E5E0D8]/60 rounded-xl">
+                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#A37B5C]">
+                  <Sparkles className="h-4 w-4 text-[#A37B5C]" />
+                  <span>AI Summary</span>
+                </div>
+                <p className="text-sm text-[#4A4A3A] leading-relaxed font-sans">
+                  {issue.summary}
+                </p>
+              </div>
+            )}
+
             <div className="space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[#5A5A40]">Reported Complaint</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#5A5A40]">
+                {issue.summary ? "Citizen Report" : "Reported Complaint"}
+              </h3>
               <p className="text-sm text-[#4A4A3A] leading-relaxed whitespace-pre-wrap font-sans">
                 {issue.description}
               </p>
@@ -881,20 +901,67 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
             </div>
           </div>
 
-          {/* PLACEHOLDER: AI Summary / Ingestion */}
-          <div className="border border-dashed border-[#E5E0D8] bg-[#FAF9F6]/40 rounded-2xl p-5 relative">
-            <div className="absolute top-4 right-4 bg-[#F5F5F0] text-[#8A8A6F] px-1.5 py-0.5 rounded text-[8px] font-mono font-bold tracking-wider uppercase border border-[#E5E0D8]/60">
-              Future Feature
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-[#4A4A3A]">
-                <Sparkles className="h-4 w-4 text-[#A37B5C]" />
-                <span>AI Agent Analysis</span>
+          {/* AI Agent Analysis Card */}
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[#A37B5C]">
+                <Sparkles className="h-4 w-4" />
+                <span className="text-xs font-bold uppercase tracking-wider">AI Agent Analysis</span>
               </div>
-              <p className="text-[11px] text-[#8A8A6F] leading-normal">
-                AI summary is currently pending. The **Ingestion Agent** and **Community Intelligence Agents** will evaluate duplicate indicators, auto-verify categories, and suggest corrective actions in Phase 2.
-              </p>
+              {issue.category && (
+                <span className="bg-emerald-50 text-emerald-800 text-[9px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded-md border border-emerald-200/45">
+                  Verified Ingestion
+                </span>
+              )}
             </div>
+
+            {issue.category ? (
+              <div className="space-y-4 text-xs">
+                {/* Visual grid for Category, Severity, and Department */}
+                <div className="grid grid-cols-2 gap-3 font-medium">
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Category</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.category.replace("_", " ")}</p>
+                  </div>
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Severity</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.severity}</p>
+                  </div>
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1 col-span-2">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Recommended Department</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold">{issue.recommendedDepartment}</p>
+                  </div>
+                </div>
+
+                {/* Confidence Level (Development-only) */}
+                {issue.confidence !== undefined && (
+                  <div className="p-3 bg-[#F5F5F0]/50 border border-[#E5E0D8]/30 rounded-xl flex items-center justify-between">
+                    <span className="text-[#8A8A6F] font-semibold text-[10px] uppercase tracking-wider">Ingestion Confidence</span>
+                    <span className="font-mono font-bold text-[#1A1A1A] bg-white border border-[#E5E0D8]/50 px-2 py-0.5 rounded-md">
+                      {Math.round(issue.confidence * 100)}%
+                    </span>
+                  </div>
+                )}
+
+                {/* Visual Evidence Bullet Points */}
+                {issue.visualEvidence && issue.visualEvidence.length > 0 && (
+                  <div className="space-y-2 border-t border-[#F5F5F0] pt-3">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider block">Visual Evidence</span>
+                    <ul className="space-y-1.5 list-disc pl-4 text-xs text-[#4A4A3A] font-medium">
+                      {issue.visualEvidence.map((point: string, idx: number) => (
+                        <li key={idx} className="leading-relaxed">{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1.5 py-2">
+                <p className="text-[11px] text-[#8A8A6F] leading-normal">
+                  No AI Ingest metadata is available for this legacy report. Real-time Category and Severity classification are active on all new submissions.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Real-time Endorsement System Interface */}

@@ -300,9 +300,14 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
                           </div>
                         </div>
 
-                        {/* Brief description */}
-                        <p className="text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3">
-                          {issue.description}
+                        {/* AI Headline & Summary/Description preview */}
+                        {issue.title && (
+                          <h3 className="text-sm md:text-base font-bold text-[#1A1A1A] tracking-tight mb-1 group-hover:text-[#5A5A40] transition-colors line-clamp-1">
+                            {issue.title}
+                          </h3>
+                        )}
+                        <p className="text-xs md:text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3">
+                          {issue.summary || issue.description}
                         </p>
 
                         {/* Landmark address pin */}
