@@ -155,6 +155,17 @@ export async function getIssues(params = {}) {
 }
 
 /**
+ * Protected: Update status of a civic issue (Admin only).
+ * Matches PATCH /api/issues/:id
+ */
+export async function updateIssueStatus(id, status) {
+  return apiRequest(`/issues/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status })
+  });
+}
+
+/**
  * Protected: Endorse or un-endorse a civic issue.
  * Matches POST /api/issues/:id/endorse
  */

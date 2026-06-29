@@ -930,4 +930,83 @@ router.delete("/:id/comments/:commentId", verifyToken, async (req: Authenticated
   }
 });
 
+/**
+ * PATCH /api/issues/:id
+ * Protected endpoint for administrators to update issue details (e.g., status).
+ */
+router.patch("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+    const { status } = req.body;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    // 1. Check permissions
+    const authorized = await canModerateIssue(uid, issueId);
+    if (!authorized) {
+      res.status(403).json({ success: false, error: "Forbidden: You do not have permission to moderate this issue." });
+      return;
+    }
+
+    // 2. Validate status
+    const allowedStatuses = ["reported", "verified", "in_progress", "resolved"];
+    if (status && !allowedStatuses.includes(status)) {
+      res.status(400).json({ success: false, error: "Invalid status value." });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const issueDoc = await issueRef.get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const issueData = issueDoc.data() || {};
+    const oldStatus = issueData.status || "reported";
+
+    const updateData: any = {
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    if (status) {
+      updateData.status = status;
+    }
+
+    // Perform the update
+    await db.runTransaction(async (transaction) => {
+      transaction.update(issueRef, updateData);
+
+      // If status changed, write to status_history
+      if (status && status !== oldStatus) {
+        const historyRef = issueRef.collection("status_history").doc();
+        transaction.set(historyRef, {
+          fromStatus: oldStatus,
+          toStatus: status,
+          changedBy: req.user?.name || "Administrator",
+          note: `Status manually updated by administrator.`,
+          timestamp: FieldValue.serverTimestamp()
+        });
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        status: status || oldStatus
+      }
+    });
+  } catch (error: any) {
+    console.error("Error updating issue:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to update issue status."
+    });
+  }
+});
+
 export default router;

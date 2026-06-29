@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { getPermissions } from "../api";
 import DashboardLayout from "../components/dashboard/DashboardLayout";
 import DashboardCard from "../components/dashboard/DashboardCard";
+import IssueManagement from "../components/dashboard/IssueManagement";
 import { 
   AlertCircle, 
   Flame, 
@@ -101,6 +102,29 @@ export default function OperationsDashboard({
     localStorage.setItem("awaaz_selected_scope_id", scope.id);
   };
 
+  // Synchronize URL path and currentSection
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path === "/dashboard/issues") {
+      setCurrentSection("issues");
+    } else if (path === "/dashboard/community") {
+      setCurrentSection("community");
+    } else if (path === "/dashboard/settings") {
+      setCurrentSection("settings");
+    } else {
+      setCurrentSection("dashboard");
+    }
+  }, []);
+
+  const handleSectionChange = (section: string) => {
+    setCurrentSection(section);
+    let newPath = "/dashboard";
+    if (section !== "dashboard") {
+      newPath = `/dashboard/${section}`;
+    }
+    window.history.pushState(null, "", newPath);
+  };
+
   // Safe logout wrapper
   const handleLogout = async () => {
     try {
@@ -152,15 +176,17 @@ export default function OperationsDashboard({
 
   // Section placeholder router
   const renderContent = () => {
+    if (currentSection === "issues") {
+      return <IssueManagement selectedScope={selectedScope} />;
+    }
+
     if (currentSection !== "dashboard") {
       const sectionLabels: Record<string, string> = {
-        issues: "Issue Management",
         community: "Community Directory & Moderation",
         settings: "Admin Settings"
       };
 
       const sectionDetails: Record<string, string> = {
-        issues: "Review, assign, and update resolution status of local issues within your scope.",
         community: "Monitor community memberships, roles, and group configurations.",
         settings: "Configure notification thresholds, priority rules, and basic dashboard preferences."
       };
@@ -289,7 +315,7 @@ export default function OperationsDashboard({
       selectedScope={selectedScope}
       onScopeChange={handleScopeChange}
       currentSection={currentSection}
-      onSectionChange={setCurrentSection}
+      onSectionChange={handleSectionChange}
       onBackToCitizenApp={onBackToCitizenFeed}
     >
       {renderContent()}

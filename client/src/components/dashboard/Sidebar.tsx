@@ -24,7 +24,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "issues", label: "Issues", icon: AlertTriangle, placeholder: "Soon" },
+    { id: "issues", label: "Issues", icon: AlertTriangle },
     { id: "community", label: "Community", icon: Users2, placeholder: "Soon" },
     { id: "settings", label: "Settings", icon: Settings2, placeholder: "Soon" },
   ];

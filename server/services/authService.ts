@@ -105,12 +105,14 @@ export async function canModerateIssue(uid: string, issueId: string): Promise<bo
     const data = issueDoc.data() || {};
     const groupId = data.groupId;
 
-    if (!groupId || groupId.trim() === "" || groupId === "awaaz_public") {
+    const groupIdStr = groupId ? String(groupId).trim() : "";
+
+    if (groupIdStr === "" || groupIdStr === "null" || groupIdStr === "undefined" || groupIdStr === "awaaz_public") {
       // Public issue requires public/municipal admin authority
       return isPublicAdmin(uid);
     } else {
       // Community-scoped issue requires community admin authority
-      return isGroupAdmin(uid, groupId);
+      return isGroupAdmin(uid, groupIdStr);
     }
   } catch (err) {
     console.error(`[authService] Error in canModerateIssue for user ${uid}, issue ${issueId}:`, err);

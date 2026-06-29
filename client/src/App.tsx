@@ -100,7 +100,7 @@ function MainDashboard() {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   // Dashboard routing & authorization states
-  const [isDashboard, setIsDashboard] = useState(window.location.pathname === "/dashboard");
+  const [isDashboard, setIsDashboard] = useState(window.location.pathname.startsWith("/dashboard"));
   const [hasOpsPermission, setHasOpsPermission] = useState(false);
 
   // Sync back to citizen feed helper
@@ -114,7 +114,7 @@ function MainDashboard() {
   // Listen for browser path changes (back/forward)
   useEffect(() => {
     const handlePopStatePathCheck = () => {
-      setIsDashboard(window.location.pathname === "/dashboard");
+      setIsDashboard(window.location.pathname.startsWith("/dashboard"));
     };
     window.addEventListener("popstate", handlePopStatePathCheck);
     return () => window.removeEventListener("popstate", handlePopStatePathCheck);
