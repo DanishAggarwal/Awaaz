@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { db } from "../firebase-admin";
 import { verifyToken, AuthenticatedRequest } from "../middleware/verifyToken";
 import { FieldValue } from "firebase-admin/firestore";
+import { getUserManagedScopes } from "../services/authService";
 
 const router = Router();
 
@@ -104,6 +105,32 @@ router.post("/sync", verifyToken, async (req: AuthenticatedRequest, res: Respons
     res.status(500).json({
       success: false,
       error: error.message || "Failed to sync user profile"
+    });
+  }
+});
+
+/**
+ * GET /api/auth/permissions
+ * Protected endpoint to retrieve user operational/management scopes and permissions for dashboards.
+ */
+router.get("/permissions", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const permData = await getUserManagedScopes(uid);
+    res.json({
+      success: true,
+      data: permData
+    });
+  } catch (error: any) {
+    console.error("Error in /api/auth/permissions:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to retrieve permissions profile"
     });
   }
 });

@@ -214,4 +214,12 @@ export async function deleteComment(issueId, commentId) {
   });
 }
 
+/**
+ * Protected: Retrieve user operational/management scopes and permissions for dashboards.
+ * Matches GET /api/auth/permissions
+ */
+export async function getPermissions() {
+  return apiRequest("/auth/permissions");
+}
+
 

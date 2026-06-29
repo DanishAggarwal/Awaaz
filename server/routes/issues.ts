@@ -6,6 +6,7 @@ import { calculatePriorityScore } from "../utils/priority";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
 import { analyzeCivicIssue } from "../agents/ingestionAgent";
 import { findDuplicateIssue } from "../services/duplicateService";
+import { canModerateIssue, isGroupMember } from "../services/authService";
 
 const router = Router();
 
@@ -43,20 +44,19 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
     }
 
     // Infer visibility if not provided, or ensure visibility aligns with groupId
-    if (groupId) {
+    if (groupId && groupId !== "awaaz_public") {
       visibility = "group";
     } else {
       visibility = "public";
-      groupId = null;
+      groupId = "awaaz_public";
     }
 
     let groupName = "Public Initiative";
 
-    // 2. Validate user belongs to selected group if groupId is provided
-    if (groupId) {
-      const membershipId = `${groupId}_${uid}`;
-      const membershipDoc = await db.collection("group_members").doc(membershipId).get();
-      if (!membershipDoc.exists) {
+    // 2. Validate user belongs to selected group if groupId is provided (and is not the reserved public group)
+    if (groupId && groupId !== "awaaz_public") {
+      const isMember = await isGroupMember(uid, groupId);
+      if (!isMember) {
         res.status(403).json({ success: false, error: "You must be a member of this community to report an issue." });
         return;
       }
@@ -197,9 +197,20 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
     const batch = db.batch();
     batch.set(issueRef, newIssueData);
     if (groupId) {
-      batch.update(db.collection("groups").doc(groupId), {
-        issueCount: FieldValue.increment(1)
-      });
+      const groupDocRef = db.collection("groups").doc(groupId);
+      if (groupId === "awaaz_public") {
+        batch.set(groupDocRef, {
+          id: "awaaz_public",
+          name: "awaaz_public",
+          type: "system",
+          description: "Public Civic Network",
+          issueCount: FieldValue.increment(1)
+        }, { merge: true });
+      } else {
+        batch.update(groupDocRef, {
+          issueCount: FieldValue.increment(1)
+        });
+      }
     }
 
     await batch.commit();
@@ -271,9 +282,11 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
 
     const uid = req.user?.uid;
     let endorsed = false;
+    let canModerate = false;
     if (uid) {
       const endorsementDoc = await db.collection("issues").doc(issueId).collection("endorsements").doc(uid).get();
       endorsed = endorsementDoc.exists;
+      canModerate = await canModerateIssue(uid, issueId);
     }
 
     const statusHistorySnapshot = await db.collection("issues").doc(issueId).collection("status_history").orderBy("timestamp", "desc").get();
@@ -294,6 +307,7 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
       ...issueData,
       id: issueDoc.id,
       endorsed,
+      canModerate,
       statusHistory,
       createdAt: createdAtStr,
       updatedAt: updatedAtStr,
@@ -341,7 +355,14 @@ router.get("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =>
 
     // Filter by specific groupId
     if (groupIdQuery) {
-      queryRef = queryRef.where("groupId", "==", groupIdQuery);
+      if (groupIdQuery === "awaaz_public") {
+        // Backwards compatibility: legacy public issues have groupId = null but visibility = "public".
+        // Newly created public issues have groupId = "awaaz_public" and visibility = "public".
+        // Filtering by visibility = "public" correctly fetches both.
+        queryRef = queryRef.where("visibility", "==", "public");
+      } else {
+        queryRef = queryRef.where("groupId", "==", groupIdQuery);
+      }
     } 
     // Filter by scope
     else if (scope === "public") {

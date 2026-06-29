@@ -41,14 +41,14 @@ export async function findDuplicateIssue(
     return null;
   }
 
-  const normGroupId = (groupId && groupId.trim() !== "") ? groupId.trim() : null;
+  const normGroupId = (groupId && groupId.trim() !== "") ? groupId.trim() : "awaaz_public";
 
   try {
     // 1. Query Firestore issues filtering by category (Single-field index is always active)
     let query = db.collection("issues").where("category", "==", category);
 
-    // If groupId is provided, we can further filter at DB layer to minimize reads
-    if (normGroupId) {
+    // If groupId is a specific community (not the reserved public group), filter at the database layer
+    if (normGroupId !== "awaaz_public") {
       query = query.where("groupId", "==", normGroupId);
     }
 
@@ -72,10 +72,15 @@ export async function findDuplicateIssue(
       }
 
       // Same visibility scope check:
-      // If we queried with groupId, it is already filtered. If not, make sure candidate has no groupId
-      if (!normGroupId) {
-        if (data.groupId && data.groupId.trim() !== "") {
-          return; // Skip since candidate belongs to a community but submission is public
+      if (normGroupId === "awaaz_public") {
+        const candidateGroupId = data.groupId;
+        // Skip if candidate has a valid community groupId that is not public
+        if (candidateGroupId && candidateGroupId !== "awaaz_public" && candidateGroupId.trim() !== "") {
+          return;
+        }
+      } else {
+        if (data.groupId !== normGroupId) {
+          return;
         }
       }
 

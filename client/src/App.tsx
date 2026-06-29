@@ -22,7 +22,7 @@ import {
   Loader2,
   Plus
 } from "lucide-react";
-import { getRisingIssues, getGroups, joinGroup } from "./api";
+import { getRisingIssues, getGroups, joinGroup, getPermissions } from "./api";
 import GroupsPage from "./pages/GroupsPage";
 import GroupDetailPage from "./pages/GroupDetailPage";
 import CreateGroupModal from "./components/groups/CreateGroupModal";
@@ -30,6 +30,7 @@ import IssuesFeed from "./pages/IssuesFeed";
 import ReportIssue from "./pages/ReportIssue";
 import IssueDetail from "./pages/IssueDetail";
 import { NearbyIssues, MyReports, NotificationsPage } from "./pages/PlaceholderPages";
+import OperationsDashboard from "./pages/OperationsDashboard";
 
 // Define TypeScript structures
 interface Issue {
@@ -97,6 +98,49 @@ function MainDashboard() {
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [isAppCreateModalOpen, setIsAppCreateModalOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Dashboard routing & authorization states
+  const [isDashboard, setIsDashboard] = useState(window.location.pathname === "/dashboard");
+  const [hasOpsPermission, setHasOpsPermission] = useState(false);
+
+  // Sync back to citizen feed helper
+  const handleBackToCitizenFeed = React.useCallback(() => {
+    window.history.pushState(null, "", "/");
+    setIsDashboard(false);
+    setActiveTab("feed");
+    window.dispatchEvent(new Event("popstate"));
+  }, []);
+
+  // Listen for browser path changes (back/forward)
+  useEffect(() => {
+    const handlePopStatePathCheck = () => {
+      setIsDashboard(window.location.pathname === "/dashboard");
+    };
+    window.addEventListener("popstate", handlePopStatePathCheck);
+    return () => window.removeEventListener("popstate", handlePopStatePathCheck);
+  }, []);
+
+  // Fetch and check operations authorization for conditional navigation link visibility
+  useEffect(() => {
+    async function checkOpsAccess() {
+      try {
+        const res = await getPermissions();
+        if (res && res.success && res.data && res.data.canAccessOperationalTools) {
+          setHasOpsPermission(true);
+        } else {
+          setHasOpsPermission(false);
+        }
+      } catch (err) {
+        console.error("Failed to check operations permission:", err);
+        setHasOpsPermission(false);
+      }
+    }
+    if (user) {
+      checkOpsAccess();
+    } else {
+      setHasOpsPermission(false);
+    }
+  }, [user]);
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -334,6 +378,14 @@ function MainDashboard() {
     }
   };
 
+  if (isDashboard) {
+    return (
+      <OperationsDashboard
+        onBackToCitizenFeed={handleBackToCitizenFeed}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F5F0] text-[#1A1A1A] flex flex-col antialiased font-sans">
       {/* Container holding three-column layout */}
@@ -408,6 +460,26 @@ function MainDashboard() {
                 <Bell className="h-4.5 w-4.5" />
                 <span>Notifications</span>
               </button>
+
+              {hasOpsPermission && (
+                <button 
+                  onClick={() => {
+                    window.history.pushState(null, "", "/dashboard");
+                    setIsDashboard(true);
+                    window.dispatchEvent(new Event("popstate"));
+                  }}
+                  id="btn-sidebar-ops-console"
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-bold bg-[#5A5A40]/10 hover:bg-[#5A5A40]/15 text-[#5A5A40] transition-colors cursor-pointer mt-1"
+                >
+                  <div className="flex items-center gap-3">
+                    <Shield className="h-4.5 w-4.5 text-[#5A5A40]" />
+                    <span>Admin Dashboard</span>
+                  </div>
+                  <span className="text-[9px] bg-[#5A5A40] text-white px-1.5 py-0.5 rounded-md font-mono uppercase tracking-wider font-bold">
+                    Admin
+                  </span>
+                </button>
+              )}
             </nav>
 
             {/* Groups Section */}

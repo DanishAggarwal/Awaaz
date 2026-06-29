@@ -20,6 +20,10 @@ router.get("/", async (req: Request, res: Response) => {
     let groups: any[] = [];
 
     snapshot.forEach((doc: any) => {
+      if (doc.id === "awaaz_public") {
+        return; // Skip reserved system group
+      }
+      
       const data = doc.data();
       const createdAtClient = data.createdAt && typeof data.createdAt.toDate === "function"
         ? data.createdAt.toDate().toISOString()
@@ -157,6 +161,11 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
 router.get("/:id", async (req: Request, res: Response) => {
   try {
     const groupId = req.params.id;
+    if (groupId === "awaaz_public") {
+      res.status(403).json({ success: false, error: "Access denied to system-managed group." });
+      return;
+    }
+
     const groupDoc = await db.collection("groups").doc(groupId).get();
 
     if (!groupDoc.exists) {
@@ -198,6 +207,11 @@ router.get("/:id", async (req: Request, res: Response) => {
 router.post("/:id/join", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const groupId = req.params.id;
+    if (groupId === "awaaz_public") {
+      res.status(403).json({ success: false, error: "Cannot explicitly join the reserved Public Civic Network." });
+      return;
+    }
+
     const uid = req.user?.uid;
     if (!uid) {
       res.status(401).json({ success: false, error: "Unauthorized" });
@@ -265,6 +279,11 @@ router.post("/:id/join", verifyToken, async (req: AuthenticatedRequest, res: Res
 router.get("/:id/my-role", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const groupId = req.params.id;
+    if (groupId === "awaaz_public") {
+      res.status(403).json({ success: false, error: "Access denied to system-managed group." });
+      return;
+    }
+
     const uid = req.user?.uid;
     if (!uid) {
       res.status(401).json({ success: false, error: "Unauthorized" });
@@ -305,6 +324,10 @@ router.get("/:id/my-role", verifyToken, async (req: AuthenticatedRequest, res: R
 router.get("/:id/members", async (req: Request, res: Response) => {
   try {
     const groupId = req.params.id;
+    if (groupId === "awaaz_public") {
+      res.status(403).json({ success: false, error: "Access denied to system-managed group." });
+      return;
+    }
 
     // Fetch all members of this group
     const membersSnapshot = await db.collection("group_members")

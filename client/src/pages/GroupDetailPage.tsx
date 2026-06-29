@@ -346,7 +346,7 @@ export default function GroupDetailPage({
                                 <span className="text-[10px] font-bold font-mono">{issue.priorityScore || 50}</span>
                               </div>
                             </div>
-                            <p className="text-xs text-[#4A4A3A] font-semibold leading-snug line-clamp-2 group-hover:text-[#5A5A40] transition-colors">
+                            <p className="text-xs text-[#4A4A3A] font-semibold leading-snug line-clamp-2 group-hover:text-[#5A5A40] transition-colors break-words">
                               {issue.description}
                             </p>
                           </div>

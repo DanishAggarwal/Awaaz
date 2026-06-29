@@ -280,7 +280,7 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
                     )}
 
                     {/* Body Info column (right on large, bottom on mobile) */}
-                    <div className="flex-grow p-5 flex flex-col justify-between space-y-4">
+                    <div className="flex-grow min-w-0 p-5 flex flex-col justify-between space-y-4">
                       <div>
                         {/* Priority and Status header */}
                         <div className="flex items-center justify-between gap-3 mb-2.5">
@@ -306,7 +306,7 @@ export default function IssuesFeed({ joinedGroups, onViewIssue, onReportIssue, i
                             {issue.title}
                           </h3>
                         )}
-                        <p className="text-xs md:text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3">
+                        <p className="text-xs md:text-sm text-[#4A4A3A] font-medium leading-relaxed line-clamp-3 mb-3 break-words">
                           {issue.summary || issue.description}
                         </p>
 
