@@ -165,6 +165,16 @@ export async function endorseIssue(id) {
 }
 
 /**
+ * Protected: Support an existing duplicate issue.
+ * Matches POST /api/issues/:id/support-duplicate
+ */
+export async function supportDuplicateIssue(id) {
+  return apiRequest(`/issues/${id}/support-duplicate`, {
+    method: "POST"
+  });
+}
+
+/**
  * Public/Protected: Get comments of a civic issue.
  * Matches GET /api/issues/:id/comments
  */

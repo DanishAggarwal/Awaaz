@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { calculatePriorityScore } from "../utils/priority";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
 import { analyzeCivicIssue } from "../agents/ingestionAgent";
+import { findDuplicateIssue } from "../services/duplicateService";
 
 const router = Router();
 
@@ -23,7 +24,7 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
       return;
     }
 
-    let { groupId, description, imageUrls, location, visibility } = req.body;
+    let { groupId, description, imageUrls, location, visibility, allowDuplicate } = req.body;
 
     // 1. Validations
     if (!description || !description.trim()) {
@@ -95,6 +96,52 @@ router.post("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =
         reason: aiResult.rejectionReason || "The uploaded image does not depict a public civic issue."
       });
       return;
+    }
+
+    // 4.5. Run Duplicate Detection (Phase 3)
+    let duplicateCandidate = null;
+    if (!allowDuplicate) {
+      const lat = typeof location.latitude === "number" ? location.latitude : parseFloat(location.latitude);
+      const lng = typeof location.longitude === "number" ? location.longitude : parseFloat(location.longitude);
+
+      if (typeof lat === "number" && !isNaN(lat) && typeof lng === "number" && !isNaN(lng)) {
+        try {
+          duplicateCandidate = await findDuplicateIssue({
+            db,
+            latitude: lat,
+            longitude: lng,
+            category: aiResult.category!,
+            groupId
+          });
+        } catch (err: any) {
+          console.error("Duplicate detection failed:", err);
+          res.status(500).json({
+            success: false,
+            error: "An internal server error occurred during duplicate check."
+          });
+          return;
+        }
+      }
+
+      if (duplicateCandidate) {
+        // TODO: When a duplicate is eventually confirmed by the user (future phase), the existing issue will increase dna.duplicateReports.
+        res.status(409).json({
+          success: false,
+          duplicate: true,
+          message: "A similar issue has already been reported nearby.",
+          existingIssue: {
+            id: duplicateCandidate.id,
+            title: duplicateCandidate.title,
+            distance: duplicateCandidate.distance,
+            endorsementCount: duplicateCandidate.endorsementCount,
+            status: duplicateCandidate.status,
+            summary: duplicateCandidate.summary,
+            category: duplicateCandidate.category,
+            priorityScore: duplicateCandidate.priorityScore
+          }
+        });
+        return;
+      }
     }
 
     // 5. Calculate priority score including AI severity
@@ -478,6 +525,110 @@ router.post("/:id/endorse", verifyToken, async (req: AuthenticatedRequest, res: 
     res.status(500).json({
       success: false,
       error: error.message || "Failed to toggle endorsement."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/support-duplicate
+ * Protected endpoint to support an existing issue and mark it as duplicate reports.
+ * Uses a single Firestore transaction to perform atomic updates.
+ */
+router.post("/:id/support-duplicate", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const displayName = req.user?.name || "Citizen";
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const endorsementRef = issueRef.collection("endorsements").doc(uid);
+
+    await db.runTransaction(async (transaction) => {
+      const issueDoc = await transaction.get(issueRef);
+      if (!issueDoc.exists) {
+        throw new Error("Issue not found.");
+      }
+
+      const issueData = issueDoc.data() || {};
+      const issueStatus = issueData.status || "reported";
+      
+      const activeStatuses = ["reported", "verified", "in_progress"];
+      if (!activeStatuses.includes(issueStatus)) {
+        throw new Error("This issue is no longer active and cannot receive duplicate support.");
+      }
+
+      const endorsementDoc = await transaction.get(endorsementRef);
+      const isNewEndorsement = !endorsementDoc.exists;
+
+      const currentCount = issueData.endorsementCount || 0;
+      const newEndorsementCount = isNewEndorsement ? currentCount + 1 : currentCount;
+
+      if (isNewEndorsement) {
+        transaction.set(endorsementRef, {
+          uid,
+          displayName,
+          createdAt: FieldValue.serverTimestamp()
+        });
+      }
+
+      const dna = issueData.dna || {};
+      const prevDuplicateReports = dna.duplicateReports || 0;
+      const newDuplicateReports = prevDuplicateReports + 1;
+
+      const updatedDna = {
+        ...dna,
+        duplicateReports: newDuplicateReports,
+        lastPriorityUpdate: FieldValue.serverTimestamp()
+      };
+
+      const updatedIssueDataForPriority = {
+        ...issueData,
+        endorsementCount: newEndorsementCount,
+        dna: {
+          ...dna,
+          duplicateReports: newDuplicateReports
+        }
+      };
+
+      const newPriorityScore = calculatePriorityScore(updatedIssueDataForPriority);
+
+      let newStatus = issueStatus;
+      if (currentCount < COMMUNITY_VERIFICATION_THRESHOLD && newEndorsementCount >= COMMUNITY_VERIFICATION_THRESHOLD && newStatus === "reported") {
+        newStatus = "verified";
+
+        const historyRef = issueRef.collection("status_history").doc();
+        transaction.set(historyRef, {
+          fromStatus: "reported",
+          toStatus: "verified",
+          changedBy: "system",
+          note: "Automatically verified after reaching community endorsement threshold via duplicate support.",
+          timestamp: FieldValue.serverTimestamp()
+        });
+      }
+
+      transaction.update(issueRef, {
+        endorsementCount: newEndorsementCount,
+        priorityScore: newPriorityScore,
+        status: newStatus,
+        dna: updatedDna,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    });
+
+    res.json({
+      success: true,
+      message: "Successfully supported the existing report and updated impact metadata."
+    });
+  } catch (error: any) {
+    console.error("Error supporting duplicate issue:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to process duplicate support request."
     });
   }
 });

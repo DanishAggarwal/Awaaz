@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { auth } from "../firebase";
-import { createIssue } from "../api";
+import { createIssue, supportDuplicateIssue } from "../api";
 import { uploadImage } from "../utils/uploadImage";
 import { 
   getCurrentLocation, 
@@ -21,7 +21,7 @@ import {
 
 interface ReportIssueProps {
   joinedGroups: any[];
-  onSuccess: (newIssue: any) => void;
+  onSuccess: (newIssue: any, customToastMessage?: string | null) => void;
   onCancel: () => void;
   initialGroupId?: string | null;
 }
@@ -54,6 +54,14 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // Duplicate Resolution states
+  const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
+  const [duplicateCandidate, setDuplicateCandidate] = useState<any | null>(null);
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [isSupportingDuplicate, setIsSupportingDuplicate] = useState(false);
+  const [showAnywayConfirm, setShowAnywayConfirm] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   // Automatically trigger location detection on load to make UX smooth
   useEffect(() => {
@@ -129,6 +137,7 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
     }
 
     setSelectedFiles(prev => [...prev, ...validImageFiles]);
+    setUploadedImageUrls([]);
     
     // Create local object URLs for previewing
     const newPreviews = validImageFiles.map(file => URL.createObjectURL(file));
@@ -142,6 +151,7 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
     
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
     setFilePreviews(prev => prev.filter((_, i) => i !== index));
+    setUploadedImageUrls([]);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -156,13 +166,16 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
   };
 
   // Form Submission and Image Upload
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    handleActualSubmit(false);
+  };
+
+  const handleActualSubmit = async (allowBypass: boolean = false) => {
     setError(null);
 
     // Initial fields validation
     if (!isCommunityPreselected && !selectedGroupId && initialGroupId !== null) {
-      // If we allowed choosing but they didn't pick anything (for group context)
       setError("Please select the community group where this issue is occurring.");
       return;
     }
@@ -183,7 +196,7 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
     }
 
     setIsUploading(true);
-    const imageUrls: string[] = [];
+    let imageUrlsToUse = [...uploadedImageUrls];
 
     try {
       const uid = auth.currentUser?.uid;
@@ -191,13 +204,16 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
         throw new Error("You must be logged in to report an issue.");
       }
 
-      // 1. Upload images to Cloudinary
-      for (let i = 0; i < selectedFiles.length; i++) {
-        const file = selectedFiles[i];
-        setUploadProgress(`Uploading photo ${i + 1} of ${selectedFiles.length}...`);
-        
-        const downloadUrl = await uploadImage(file);
-        imageUrls.push(downloadUrl);
+      // 1. Upload images if we haven't already uploaded them
+      if (imageUrlsToUse.length === 0) {
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const file = selectedFiles[i];
+          setUploadProgress(`Uploading photo ${i + 1} of ${selectedFiles.length}...`);
+          
+          const downloadUrl = await uploadImage(file);
+          imageUrlsToUse.push(downloadUrl);
+        }
+        setUploadedImageUrls(imageUrlsToUse);
       }
 
       setUploadProgress("Filing official civic complaint with Awaaz Ledger...");
@@ -206,19 +222,28 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
       // Group ID is null if we are in a public reporting context
       const targetGroupId = selectedGroupId || null;
 
-      const res = await createIssue({
+      const submitPayload: any = {
         groupId: targetGroupId,
         description: description.trim(),
-        imageUrls,
+        imageUrls: imageUrlsToUse,
         location: {
           latitude: selectedLocation.latitude,
           longitude: selectedLocation.longitude,
           address: selectedLocation.address.trim()
         }
-      });
+      };
+
+      if (allowBypass) {
+        submitPayload.allowDuplicate = true;
+      }
+
+      const res = await createIssue(submitPayload);
 
       if (res && res.success && res.data && res.data.issue) {
         onSuccess(res.data.issue);
+      } else if (res && res.duplicate && res.existingIssue) {
+        setDuplicateCandidate(res.existingIssue);
+        setShowDuplicateDialog(true);
       } else {
         throw new Error(res?.error || "Failed to create issue on the backend.");
       }
@@ -229,6 +254,48 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
       setIsUploading(false);
       setUploadProgress("");
     }
+  };
+
+  // Duplicate Resolution actions
+
+  // Action 1: Support Existing Issue
+  const handleSupportExisting = async () => {
+    if (!duplicateCandidate) return;
+    setIsSupportingDuplicate(true);
+    setDuplicateError(null);
+    try {
+      const res = await supportDuplicateIssue(duplicateCandidate.id);
+      if (res && res.success) {
+        setShowDuplicateDialog(false);
+        const candidateId = duplicateCandidate.id;
+        setDuplicateCandidate(null);
+        onSuccess({ id: candidateId }, "Successfully supported the existing report and updated impact metadata.");
+      } else {
+        throw new Error(res?.error || "Failed to support/endorse the existing issue.");
+      }
+    } catch (err: any) {
+      console.error("Failed to support existing duplicate issue:", err);
+      setDuplicateError(err.message || "An error occurred while supporting this issue.");
+    } finally {
+      setIsSupportingDuplicate(false);
+    }
+  };
+
+  // Action 2: View Existing Issue
+  const handleViewExisting = () => {
+    if (!duplicateCandidate) return;
+    setShowDuplicateDialog(false);
+    const candidateId = duplicateCandidate.id;
+    setDuplicateCandidate(null);
+    onSuccess({ id: candidateId }, null);
+  };
+
+  // Action 3: Report Anyway (retries submission with allowDuplicate = true)
+  const handleReportAnyway = async () => {
+    setShowDuplicateDialog(false);
+    setDuplicateCandidate(null);
+    setShowAnywayConfirm(false);
+    await handleActualSubmit(true);
   };
 
   // Find preselected group name for display
@@ -530,6 +597,153 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
           </div>
         </div>
       </form>
+
+      {/* Duplicate Resolution Dialog */}
+      {showDuplicateDialog && duplicateCandidate && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-6 animate-in fade-in zoom-in-95 duration-200">
+            
+            {/* Header */}
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-50 rounded-full text-amber-700 border border-amber-200 shrink-0">
+                <AlertCircle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold font-serif text-[#1A1A1A]">⚠ Similar Issue Found Nearby</h3>
+                <p className="text-[11px] text-[#7A756D] mt-1">
+                  Our duplicate detection system identified a matching report in your immediate vicinity.
+                </p>
+              </div>
+            </div>
+
+            {/* Explanation card */}
+            <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-4 text-xs text-[#5A5A40] leading-relaxed">
+              A similar civic issue has already been reported nearby. Supporting the existing report helps the municipality understand the true community impact while avoiding duplicate reports.
+            </div>
+
+            {/* Existing Issue details */}
+            <div className="bg-white border border-[#E5E0D8] rounded-xl p-4 space-y-3 shadow-xs">
+              <div>
+                <span className="text-[9px] font-bold uppercase tracking-wider text-[#A37B5C] bg-amber-50 px-2 py-0.5 rounded-sm">
+                  {duplicateCandidate.category || "General"}
+                </span>
+                <h4 className="text-sm font-bold text-[#1A1A1A] mt-1.5">{duplicateCandidate.title}</h4>
+              </div>
+
+              {duplicateCandidate.summary && (
+                <div className="text-xs text-[#5A5A40] bg-[#FAF9F6] p-2.5 rounded-lg border border-[#F0EBE3]">
+                  <span className="font-semibold block text-[10px] uppercase text-[#7A756D] mb-1">AI Intake Summary:</span>
+                  {duplicateCandidate.summary}
+                </div>
+              )}
+
+              {/* Grid of metadata */}
+              <div className="grid grid-cols-2 gap-3 pt-1 text-xs">
+                <div className="bg-[#FAF9F6] p-2 rounded-lg border border-[#F0EBE3]">
+                  <span className="text-[10px] text-[#7A756D] block">Distance</span>
+                  <span className="font-semibold text-[#1A1A1A]">{duplicateCandidate.distance} meters away</span>
+                </div>
+                <div className="bg-[#FAF9F6] p-2 rounded-lg border border-[#F0EBE3]">
+                  <span className="text-[10px] text-[#7A756D] block">Status</span>
+                  <span className="font-semibold capitalize text-[#1A1A1A]">{duplicateCandidate.status.replace("_", " ")}</span>
+                </div>
+                <div className="bg-[#FAF9F6] p-2 rounded-lg border border-[#F0EBE3]">
+                  <span className="text-[10px] text-[#7A756D] block">Priority Score</span>
+                  <span className="font-mono font-bold text-[#5A5A40]">{duplicateCandidate.priorityScore || 0}</span>
+                </div>
+                <div className="bg-[#FAF9F6] p-2 rounded-lg border border-[#F0EBE3]">
+                  <span className="text-[10px] text-[#7A756D] block">Endorsements</span>
+                  <span className="font-semibold text-[#1A1A1A]">{duplicateCandidate.endorsementCount} citizens</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Error display if endorsement fails */}
+            {duplicateError && (
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-800 font-medium">
+                {duplicateError}
+              </div>
+            )}
+
+            {/* Support Confirmation or Anyway Confirmation Sub-UI */}
+            {showAnywayConfirm ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                <p className="text-xs text-amber-900 leading-normal font-medium">
+                  This appears to be a similar nearby issue. Continue only if your report concerns a different real-world problem.
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleReportAnyway}
+                    className="px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Confirm & Report Anyway
+                  </button>
+                  <button
+                    onClick={() => setShowAnywayConfirm(false)}
+                    className="px-3 py-1.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-xs font-bold rounded-lg text-amber-800 transition-colors cursor-pointer"
+                  >
+                    Go Back
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Action Buttons */
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleSupportExisting}
+                  disabled={isSupportingDuplicate}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#5A5A40] hover:bg-[#4A4A30] text-white text-xs font-bold rounded-xl shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {isSupportingDuplicate ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Recording Impact Support...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>👍 Support Existing Issue (Recommended)</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleViewExisting}
+                    disabled={isSupportingDuplicate}
+                    className="px-3 py-2.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[11px] font-bold rounded-xl text-[#5A5A40] transition-colors cursor-pointer"
+                  >
+                    View Report
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAnywayConfirm(true)}
+                    disabled={isSupportingDuplicate}
+                    className="px-3 py-2.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[11px] font-bold rounded-xl text-[#7A756D] hover:text-[#5A5A40] transition-colors cursor-pointer"
+                  >
+                    Report Anyway
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDuplicateDialog(false);
+                      setDuplicateCandidate(null);
+                    }}
+                    disabled={isSupportingDuplicate}
+                    className="px-3 py-2.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[11px] font-bold rounded-xl text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {/* Future Compatibility Hook Comment */}
+            {/* TODO: Future versions may display Community Brief, Community Agent summary, Municipality progress, Resolution timeline */}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

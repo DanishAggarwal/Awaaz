@@ -575,11 +575,13 @@ function MainDashboard() {
             <ReportIssue
               joinedGroups={joinedGroups}
               initialGroupId={activeGroupId}
-              onSuccess={(newIssue) => {
-                setToast({
-                  message: `Civic issue filed successfully! Deterministic Priority Score: ${newIssue.priorityScore}`,
-                  type: "success"
-                });
+              onSuccess={(newIssue, customToastMessage) => {
+                if (customToastMessage !== null) {
+                  setToast({
+                    message: customToastMessage || `Civic issue filed successfully! Deterministic Priority Score: ${newIssue.priorityScore}`,
+                    type: "success"
+                  });
+                }
                 setActiveIssueId(newIssue.id);
                 setScrollToComments(false);
                 setActiveTab("issue_detail");
