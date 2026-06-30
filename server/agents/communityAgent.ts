@@ -4,6 +4,7 @@ import { generateWithFallback } from "../services/geminiService";
 
 export interface CommunityAnalysisResult {
   brief: string;
+  reportSummary: string;
   keyInsights: string[];
   possibleFactors: string[];
   recommendedNextStep: string;
@@ -146,6 +147,10 @@ Ensure you generate a valid JSON output adhering strictly to the provided JSON s
               type: Type.STRING,
               description: "An executive briefing of approximately 80-120 words summarizing community perspective, observations, and feedback loops."
             },
+            reportSummary: {
+              type: Type.STRING,
+              description: "A concise, objective summary of approximately 60-100 words suitable for inclusion in an official municipal or departmental civic report."
+            },
             keyInsights: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
@@ -180,6 +185,7 @@ Ensure you generate a valid JSON output adhering strictly to the provided JSON s
           },
           required: [
             "brief",
+            "reportSummary",
             "keyInsights",
             "possibleFactors",
             "recommendedNextStep",

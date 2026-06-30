@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
+import { motion } from "motion/react";
 import { 
   getIssues, 
   updateIssueStatus, 
   getComments, 
   createComment,
-  getCommunityAnalysis
+  getCommunityAnalysis,
+  exportReportPDF
 } from "../../api";
 import { 
   Search, 
@@ -73,6 +75,10 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
+  // Export Report state
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   // Status Change Confirmation Modal
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -114,25 +120,27 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     setAnalysisError(null);
   }, [selectedScope]);
 
-  // Load issue details & comments when selection changes
+  // Keep selectedIssue synced with the issues list when it changes (Client-side sync only, no API calls)
+  useEffect(() => {
+    if (!selectedIssueId) return;
+    const matched = issues.find(i => i.id === selectedIssueId);
+    if (matched) {
+      setSelectedIssue(matched);
+    }
+  }, [selectedIssueId, issues]);
+
+  // Load issue details & comments exactly once when selection changes (NOT when issues list updates)
   useEffect(() => {
     if (!selectedIssueId) return;
 
     async function loadIssueDetails() {
       try {
         setIssueLoading(true);
-        // We find the issue inside our loaded issues array to display immediately
+        // Find current issue from latest state
         const matched = issues.find(i => i.id === selectedIssueId);
         if (matched) {
-          setSelectedIssue(matched);
           setActiveImageIndex(0);
-          
-          // Use pre-existing analysis in memory if available, otherwise clear
-          if (matched.communityAnalysis) {
-            setCommunityAnalysis(matched.communityAnalysis);
-          } else {
-            setCommunityAnalysis(null);
-          }
+          setCommunityAnalysis(matched.communityAnalysis || null);
         } else {
           setCommunityAnalysis(null);
         }
@@ -178,7 +186,7 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     }
 
     loadIssueDetails();
-  }, [selectedIssueId, issues]);
+  }, [selectedIssueId]);
 
   // Handle regenerating Community Analysis
   const handleRegenerateAnalysis = async () => {
@@ -206,6 +214,34 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
       setAnalysisError(err.message || "An unexpected error occurred.");
     } finally {
       setAnalysisLoading(false);
+    }
+  };
+
+  // Handle exporting the civic report PDF
+  const handleExportReport = async () => {
+    if (!selectedIssueId || exporting) return;
+
+    try {
+      setExporting(true);
+      setExportError(null);
+      const blob = await exportReportPDF(selectedIssueId);
+      
+      // Create object URL and download the file
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `Awaaz_Civic_Report_${selectedIssueId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      
+      // Clean up
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Error exporting report:", err);
+      setExportError(err.message || "Failed to download report PDF.");
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -714,6 +750,29 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                     </button>
                   </div>
                 </div>
+
+                {/* PDF Export Section */}
+                <div className="pt-2 border-t border-[#E5E0D8]/40">
+                  <button
+                    onClick={handleExportReport}
+                    disabled={exporting}
+                    className="w-full py-2 px-3 bg-[#FAF9F6] border border-[#E5E0D8] hover:bg-[#F5F5F0] hover:border-[#D5D0C8] text-[#5A5A40] hover:text-[#4A4A35] rounded-xl text-xs font-bold text-center transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {exporting ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[#5A5A40]" />
+                        <span>Generating Civic Report...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>📄 Export Report</span>
+                      </>
+                    )}
+                  </button>
+                  {exportError && (
+                    <p className="mt-1.5 text-[10px] text-rose-600 font-medium text-center">{exportError}</p>
+                  )}
+                </div>
               </section>
 
               {/* Core Metadata Grid */}
@@ -864,7 +923,12 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-3.5">
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      transition={{ duration: 0.35, ease: "easeOut" }}
+                      className="space-y-3.5 overflow-hidden"
+                    >
                       {/* Mood, Escalate, and Confidence Header */}
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${
@@ -951,7 +1015,7 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                         <span>Comments: {communityAnalysis.sourceCommentCount ?? 0}</span>
                         <span>Generated: {new Date(communityAnalysis.generatedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
                       </div>
-                    </div>
+                    </motion.div>
                   )}
                 </div>
 
@@ -1032,7 +1096,7 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                 ) : comments.length === 0 ? (
                   <p className="text-[11px] text-[#A8A297] italic text-center py-4">No comments posted yet on this report.</p>
                 ) : (
-                  <div className="space-y-3.5 divide-y divide-[#E5E0D8]/40">
+                  <div className="space-y-3.5 divide-y divide-[#E5E0D8]/40 max-h-[350px] overflow-y-auto pr-1.5">
                     {comments.map((comment, index) => (
                       <div key={comment.id} className={`pt-3.5 ${index === 0 ? "pt-0" : ""}`}>
                         <div className="flex items-center gap-2 mb-1.5">

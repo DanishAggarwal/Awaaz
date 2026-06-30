@@ -8,6 +8,7 @@ import { analyzeCivicIssue } from "../agents/ingestionAgent";
 import { analyzeCommunityContext } from "../agents/communityAgent";
 import { findDuplicateIssue } from "../services/duplicateService";
 import { canModerateIssue, isGroupMember } from "../services/authService";
+import { generateCivicReportPDF } from "../services/pdfService";
 
 const router = Router();
 
@@ -1046,6 +1047,74 @@ router.get("/:id/community-analysis", verifyToken, async (req: AuthenticatedRequ
     res.status(500).json({
       success: false,
       error: error.message || "Failed to retrieve community analysis."
+    });
+  }
+});
+
+/**
+ * GET /api/issues/:id/export
+ * Protected route to export an official civic report as a PDF.
+ */
+router.get("/:id/export", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    // 1. Check permissions (Admin/Moderator only)
+    const authorized = await canModerateIssue(uid, issueId);
+    if (!authorized) {
+      res.status(403).json({ success: false, error: "Forbidden: You do not have permission to export reports." });
+      return;
+    }
+
+    // 2. Fetch the issue document
+    const issueDoc = await db.collection("issues").doc(issueId).get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const issueData = issueDoc.data();
+
+    // 3. Fetch comments
+    const commentsSnapshot = await db.collection("issues").doc(issueId).collection("comments").get();
+    const comments: any[] = [];
+    commentsSnapshot.forEach((doc) => {
+      comments.push(doc.data());
+    });
+
+    // 4. Download original evidence image to Buffer if present
+    let imageBuffer: Buffer | null = null;
+    if (issueData?.imageUrls && issueData.imageUrls.length > 0) {
+      try {
+        const imageUrl = issueData.imageUrls[0];
+        const response = await fetch(imageUrl);
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          imageBuffer = Buffer.from(arrayBuffer);
+        }
+      } catch (err) {
+        console.warn(`Failed to fetch image ${issueData.imageUrls[0]} for PDF report:`, err);
+      }
+    }
+
+    // 5. Generate PDF Buffer
+    const pdfBuffer = await generateCivicReportPDF(issueData, comments, imageBuffer);
+
+    // 6. Send the PDF file
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="Awaaz_Civic_Report_${issueId}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error: any) {
+    console.error("Error exporting PDF civic report:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to export PDF report."
     });
   }
 });

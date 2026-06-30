@@ -241,4 +241,29 @@ export async function getPermissions() {
   return apiRequest("/auth/permissions");
 }
 
+/**
+ * Protected: Export a professional PDF civic report for a specific issue.
+ * Matches GET /api/issues/:id/export
+ */
+export async function exportReportPDF(id) {
+  const url = `${BASE_URL}/issues/${id}/export`;
+  const headers = {};
+  
+  if (auth && auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      headers["Authorization"] = `Bearer ${token}`;
+    } catch (err) {
+      console.error("Error getting auth token for PDF export:", err);
+    }
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || "Failed to download PDF report");
+  }
+  return response.blob();
+}
+
 
