@@ -9,6 +9,7 @@ import {
   searchLocations, 
   LocationSuggestion 
 } from "../utils/location";
+import InteractiveMapPicker from "../components/InteractiveMapPicker";
 import { 
   Compass, 
   MapPin, 
@@ -445,123 +446,30 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
           />
         </div>
 
-        {/* 4. Location Details */}
+        {/* 4. Location Details (Interactive Map Experience) */}
         <div className="space-y-4 border-t border-[#F5F5F0] pt-5">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-[#5A5A40]">
-                Issue Location <span className="text-rose-500">*</span>
-              </label>
-              <p className="text-[11px] text-[#7A756D]">Set a precise geocoded location. Coordinates are verified instantly.</p>
-            </div>
-            
-            <button
-              type="button"
-              onClick={handleDetectLocation}
-              disabled={detectingLocation || isUploading}
-              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#FAF9F6] hover:bg-[#5A5A40] hover:text-white border border-[#E5E0D8] text-xs font-bold rounded-xl transition-all text-[#5A5A40] cursor-pointer"
-            >
-              {detectingLocation ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Compass className="h-3.5 w-3.5" />
-              )}
-              <span>📍 Use Current Location</span>
-            </button>
-          </div>
-
-          {locationMessage && (
-            <div className={`p-3 rounded-xl border text-[11px] flex items-center gap-2 ${
-              locationMessage.type === "success" 
-                ? "bg-emerald-50 text-emerald-800 border-emerald-100" 
-                : locationMessage.type === "error" 
-                ? "bg-rose-50 text-rose-800 border-rose-100" 
-                : "bg-amber-50 text-amber-800 border-amber-100"
-            }`}>
-              {locationMessage.type === "success" ? (
-                <CheckCircle className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-              ) : (
-                <AlertCircle className="h-3.5 w-3.5 text-rose-500 shrink-0" />
-              )}
-              <span className="font-medium">{locationMessage.text}</span>
-            </div>
-          )}
-
-          {/* Option B: Search Input */}
-          <div className="space-y-1.5 relative">
-            <label className="text-[11px] font-semibold text-[#7A756D]" htmlFor="issue-search">
-              🔍 Search Address, Locality, or Landmark
+          <div className="flex flex-col gap-1">
+            <label className="block text-xs font-bold uppercase tracking-wider text-[#5A5A40]">
+              Issue Location & Geographic Mapping <span className="text-rose-500">*</span>
             </label>
-            <div className="relative">
-              <MapPin className="absolute left-3.5 top-3.5 h-4 w-4 text-[#A8A297]" />
-              <input
-                id="issue-search"
-                type="text"
-                placeholder="Type apartment, society, street name, metro station..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setShowSuggestions(true);
-                }}
-                disabled={isUploading}
-                className="w-full text-xs bg-white border border-[#E5E0D8] rounded-xl pl-10 pr-10 py-3.5 focus:outline-none focus:border-[#5A5A40] transition-colors text-[#1A1A1A] placeholder:text-[#A8A297]"
-              />
-              {searching && (
-                <Loader2 className="absolute right-3.5 top-3.5 h-4 w-4 animate-spin text-[#5A5A40]" />
-              )}
-            </div>
-
-            {/* Suggestions Dropdown */}
-            {showSuggestions && suggestions.length > 0 && (
-              <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-[#E5E0D8] rounded-xl shadow-lg max-h-60 overflow-y-auto divide-y divide-[#F5F5F0]">
-                {suggestions.map((suggestion, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      setSelectedLocation(suggestion);
-                      setSearchQuery(suggestion.address);
-                      setShowSuggestions(false);
-                      setLocationMessage({ 
-                        text: "Location selected successfully from search suggestions.", 
-                        type: "success" 
-                      });
-                    }}
-                    className="w-full text-left px-4 py-3 text-xs text-[#4A4A3A] hover:bg-[#FAF9F6] transition-colors flex items-start gap-2 cursor-pointer"
-                  >
-                    <MapPin className="h-3.5 w-3.5 text-[#A37B5C] shrink-0 mt-0.5" />
-                    <span className="truncate">{suggestion.address}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+            <p className="text-[11px] text-[#7A756D]">
+              Select the exact location of the civic complaint. You can search, drag the map, or use GPS to position the pin.
+            </p>
           </div>
 
-          {/* Selected Location Confirmation Box */}
-          {selectedLocation ? (
-            <div className="bg-[#FAF9F6] border border-emerald-200/80 rounded-xl p-4 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1">
-                  <CheckCircle className="h-3 w-3 text-emerald-600" />
-                  ✓ Valid Location Locked
-                </span>
-                <span className="text-[9px] font-mono font-semibold text-[#7A756D] bg-white border border-[#E5E0D8] px-1.5 py-0.5 rounded-md uppercase">
-                  Source: {selectedLocation.source}
-                </span>
-              </div>
-              <h4 className="text-xs font-bold text-[#1A1A1A] leading-relaxed">{selectedLocation.address}</h4>
-              <p className="text-[10px] text-[#7A756D] font-mono">
-                Coordinates: {selectedLocation.latitude.toFixed(6)}, {selectedLocation.longitude.toFixed(6)}
-              </p>
-            </div>
-          ) : (
-            <div className="bg-rose-50 border border-rose-200/60 rounded-xl p-4">
-              <span className="text-xs font-medium text-rose-800 flex items-center gap-1.5">
-                <AlertCircle className="h-4 w-4 text-rose-600" />
-                No Valid Location Selected. Use GPS detection or search a landmark above.
-              </span>
-            </div>
-          )}
+          <InteractiveMapPicker
+            initialCoords={selectedLocation ? { latitude: selectedLocation.latitude, longitude: selectedLocation.longitude } : null}
+            initialAddress={selectedLocation?.address || ""}
+            joinedGroups={joinedGroups}
+            onChange={(lat, lng, addr) => {
+              setSelectedLocation({
+                latitude: lat,
+                longitude: lng,
+                address: addr,
+                source: "gps"
+              });
+            }}
+          />
         </div>
 
         {/* Form Footer & Actions */}
