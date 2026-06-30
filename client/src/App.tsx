@@ -682,7 +682,12 @@ function MainDashboard() {
               }}
             />
           ) : activeTab === "nearby" ? (
-            <NearbyIssues />
+            <NearbyIssues 
+              onViewIssue={(issueId) => {
+                setActiveIssueId(issueId);
+                setActiveTab("issue_detail");
+              }}
+            />
           ) : activeTab === "reports" ? (
             <MyReports 
               onViewIssue={(issueId, scrollComments) => {

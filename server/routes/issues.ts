@@ -281,7 +281,23 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
 
     const dnaCreatedAtStr = issueData.dna && issueData.dna.createdAt && typeof issueData.dna.createdAt.toDate === "function"
       ? issueData.dna.createdAt.toDate().toISOString()
-      : (issueData.dna?.createdAt || new Date().toISOString());
+      : (issueData.dna?.createdAt || createdAtStr);
+
+    const createdAtMillis = new Date(createdAtStr).getTime();
+    const hoursElapsed = Math.max(0.1, (Date.now() - createdAtMillis) / (1000 * 60 * 60));
+    const dynamicEndorsementVelocity = (issueData.endorsementCount || 0) / hoursElapsed;
+
+    const fallbackDna = {
+      reopenCount: issueData.dna?.reopenCount || issueData.reopenCount || 0,
+      duplicateCount: issueData.dna?.duplicateCount || issueData.dna?.duplicateReports || issueData.duplicateReports || issueData.duplicateCount || 0,
+      duplicateReports: issueData.dna?.duplicateReports || issueData.dna?.duplicateCount || issueData.duplicateReports || issueData.duplicateCount || 0,
+      verificationCount: issueData.dna?.verificationCount || issueData.endorsementCount || 0,
+      endorsementVelocity: issueData.dna?.endorsementVelocity ?? dynamicEndorsementVelocity,
+      createdAt: dnaCreatedAtStr,
+      lastPriorityUpdate: issueData.dna?.lastPriorityUpdate && typeof issueData.dna.lastPriorityUpdate.toDate === "function"
+        ? issueData.dna.lastPriorityUpdate.toDate().toISOString()
+        : (issueData.dna?.lastPriorityUpdate || updatedAtStr)
+    };
 
     const uid = req.user?.uid;
     let endorsed = false;
@@ -332,10 +348,7 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
         isOutdated
       } : null,
       truthAnalysisStatus: issueData.truthAnalysisStatus || null,
-      dna: issueData.dna ? {
-        ...issueData.dna,
-        createdAt: dnaCreatedAtStr
-      } : undefined
+      dna: fallbackDna
     };
 
     res.json({
@@ -442,17 +455,30 @@ router.get("/", verifyToken, async (req: AuthenticatedRequest, res: Response) =>
 
       const dnaCreatedAtClient = data.dna && data.dna.createdAt && typeof data.dna.createdAt.toDate === "function"
         ? data.dna.createdAt.toDate().toISOString()
-        : (data.dna?.createdAt || new Date().toISOString());
+        : (data.dna?.createdAt || createdAtClient);
+
+      const createdAtMillis = new Date(createdAtClient).getTime();
+      const hoursElapsed = Math.max(0.1, (Date.now() - createdAtMillis) / (1000 * 60 * 60));
+      const dynamicEndorsementVelocity = (data.endorsementCount || 0) / hoursElapsed;
+
+      const fallbackDna = {
+        reopenCount: data.dna?.reopenCount || data.reopenCount || 0,
+        duplicateCount: data.dna?.duplicateCount || data.dna?.duplicateReports || data.duplicateReports || data.duplicateCount || 0,
+        duplicateReports: data.dna?.duplicateReports || data.dna?.duplicateCount || data.duplicateReports || data.duplicateCount || 0,
+        verificationCount: data.dna?.verificationCount || data.endorsementCount || 0,
+        endorsementVelocity: data.dna?.endorsementVelocity ?? dynamicEndorsementVelocity,
+        createdAt: dnaCreatedAtClient,
+        lastPriorityUpdate: data.dna?.lastPriorityUpdate && typeof data.dna.lastPriorityUpdate.toDate === "function"
+          ? data.dna.lastPriorityUpdate.toDate().toISOString()
+          : (data.dna?.lastPriorityUpdate || updatedAtClient)
+      };
 
       issues.push({
         id: doc.id,
         ...data,
         createdAt: createdAtClient,
         updatedAt: updatedAtClient,
-        dna: data.dna ? {
-          ...data.dna,
-          createdAt: dnaCreatedAtClient
-        } : undefined
+        dna: fallbackDna
       });
     });
 
@@ -550,10 +576,33 @@ router.post("/:id/endorse", verifyToken, async (req: AuthenticatedRequest, res: 
         // TODO: Invoke Community Agent here.
       }
 
+      const dna = issueData.dna || {};
+      const createdAtTimestamp = issueData.createdAt;
+      let createdAtMillis = Date.now();
+      if (createdAtTimestamp) {
+        if (typeof createdAtTimestamp.toDate === "function") {
+          createdAtMillis = createdAtTimestamp.toDate().getTime();
+        } else if (typeof createdAtTimestamp === "string") {
+          createdAtMillis = new Date(createdAtTimestamp).getTime();
+        } else if (typeof createdAtTimestamp.seconds === "number") {
+          createdAtMillis = createdAtTimestamp.seconds * 1000;
+        }
+      }
+      const hoursElapsed = Math.max(0.1, (Date.now() - createdAtMillis) / (1000 * 60 * 60));
+      const endorsementVelocity = newCount / hoursElapsed;
+
+      const updatedDna = {
+        ...dna,
+        verificationCount: newCount,
+        endorsementVelocity,
+        lastPriorityUpdate: FieldValue.serverTimestamp()
+      };
+
       transaction.update(issueRef, {
         endorsementCount: newCount,
         priorityScore: newPriorityScore,
         status: newStatus,
+        dna: updatedDna,
         updatedAt: FieldValue.serverTimestamp()
       });
     });
@@ -625,6 +674,7 @@ router.post("/:id/support-duplicate", verifyToken, async (req: AuthenticatedRequ
       const updatedDna = {
         ...dna,
         duplicateReports: newDuplicateReports,
+        duplicateCount: newDuplicateReports, // Sync both fields
         lastPriorityUpdate: FieldValue.serverTimestamp()
       };
 
@@ -633,7 +683,8 @@ router.post("/:id/support-duplicate", verifyToken, async (req: AuthenticatedRequ
         endorsementCount: newEndorsementCount,
         dna: {
           ...dna,
-          duplicateReports: newDuplicateReports
+          duplicateReports: newDuplicateReports,
+          duplicateCount: newDuplicateReports
         }
       };
 

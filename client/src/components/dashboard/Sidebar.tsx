@@ -25,8 +25,7 @@ export default function Sidebar({
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "issues", label: "Issues", icon: AlertTriangle },
-    { id: "community", label: "Community", icon: Users2, placeholder: "Soon" },
-    { id: "settings", label: "Settings", icon: Settings2, placeholder: "Soon" },
+    { id: "analytics", label: "Analytics", icon: BarChart3 },
   ];
 
   return (
@@ -62,11 +61,6 @@ export default function Sidebar({
                   <Icon className={`h-4 w-4 shrink-0 transition-colors ${isActive ? "text-[#5A5A40]" : "text-[#A8A297] group-hover:text-[#5A5A40]"}`} />
                   <span>{item.label}</span>
                 </div>
-                {item.placeholder && (
-                  <span className="text-[8px] font-bold text-[#A8A297] uppercase tracking-wider bg-[#F5F5F0] px-1.5 py-0.5 rounded-md group-hover:bg-[#EAEAE2] group-hover:text-[#7A756D] transition-colors">
-                    {item.placeholder}
-                  </span>
-                )}
               </button>
             );
           })}

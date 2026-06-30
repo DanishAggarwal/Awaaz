@@ -1059,18 +1059,46 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
                 </div>
               </div>
 
-              {issue.statusHistory && [...issue.statusHistory].reverse().map((historyItem: any) => (
-                <div key={historyItem.id} className="flex gap-4 relative">
-                  <div className="w-6 h-6 rounded-full bg-[#A37B5C] border border-[#E5E0D8] text-white flex items-center justify-center font-mono text-[10px] font-bold shrink-0 z-10">
-                    ✓
+              {issue.statusHistory && [...issue.statusHistory].reverse().map((historyItem: any) => {
+                const toStatus = historyItem.toStatus || "reported";
+                let stepTitle = "Status Updated";
+                let stepIcon = "✓";
+                let iconColor = "bg-[#A37B5C] border-[#E5E0D8] text-white";
+                
+                if (toStatus === "verified") {
+                  stepTitle = "Community Verified";
+                  stepIcon = "✓";
+                  iconColor = "bg-[#A37B5C] border-[#E5E0D8] text-white";
+                } else if (toStatus === "in_progress") {
+                  stepTitle = "Investigation Started";
+                  stepIcon = "⚙";
+                  iconColor = "bg-sky-600 border-sky-600 text-white";
+                } else if (toStatus === "resolved") {
+                  stepTitle = "Issue Resolved";
+                  stepIcon = "✓";
+                  iconColor = "bg-emerald-600 border-emerald-600 text-white";
+                } else if (toStatus === "reopened") {
+                  stepTitle = "Issue Reopened";
+                  stepIcon = "🔄";
+                  iconColor = "bg-rose-600 border-rose-600 text-white";
+                }
+
+                return (
+                  <div key={historyItem.id} className="flex gap-4 relative">
+                    <div className={`w-6 h-6 rounded-full ${iconColor} flex items-center justify-center font-mono text-[10px] font-bold shrink-0 z-10 border`}>
+                      {stepIcon}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">{stepTitle}</h4>
+                      <p className="text-[11px] text-[#7A756D] mt-0.5">{historyItem.note || `Status updated from ${historyItem.fromStatus} to ${historyItem.toStatus}.`}</p>
+                      {historyItem.changedBy && (
+                        <p className="text-[9.5px] text-[#5A5A40] font-semibold">By: {historyItem.changedBy}</p>
+                      )}
+                      <p className="text-[9px] text-[#A8A297] font-mono mt-1 font-semibold">{new Date(historyItem.timestamp).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Community Verified</h4>
-                    <p className="text-[11px] text-[#7A756D] mt-0.5">{historyItem.note || "Automatically verified after reaching community endorsement threshold."}</p>
-                    <p className="text-[9px] text-[#A8A297] font-mono mt-1 font-semibold">{new Date(historyItem.timestamp).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               {/* Pending steps if not resolved */}
               {issue.status !== "resolved" && (
@@ -1123,96 +1151,6 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
             <p className="text-[11px] text-[#7A756D] leading-normal font-medium">
               Deterministic score calculated dynamically based on structural reporting completeness and local context.
             </p>
-          </div>
-
-          {/* DNA Audit Panel */}
-          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex items-center gap-2 text-[#A37B5C]">
-              <Sparkles className="h-4 w-4" />
-              <span className="text-xs font-bold uppercase tracking-wider">Issue DNA Audit</span>
-            </div>
-
-            <p className="text-[11px] text-[#7A756D] leading-normal">
-              Immutable telemetry attributes registered directly on the decentralized ledger.
-            </p>
-
-            <div className="space-y-2 text-xs font-mono">
-              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
-                <span className="text-[#8A8A6F]">Re-open Count</span>
-                <span className="font-bold text-[#1A1A1A]">{issue.dna?.reopenCount ?? 0}</span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
-                <span className="text-[#8A8A6F]">Duplicate Reports</span>
-                <span className="font-bold text-[#1A1A1A]">{issue.dna?.duplicateCount ?? 0}</span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
-                <span className="text-[#8A8A6F]">Verification Count</span>
-                <span className="font-bold text-[#1A1A1A]">{issue.dna?.verificationCount ?? 0}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* AI Agent Analysis Card */}
-          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-[#A37B5C]">
-                <Sparkles className="h-4 w-4" />
-                <span className="text-xs font-bold uppercase tracking-wider">AI Agent Analysis</span>
-              </div>
-              {issue.category && (
-                <span className="bg-emerald-50 text-emerald-800 text-[9px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded-md border border-emerald-200/45">
-                  Verified Ingestion
-                </span>
-              )}
-            </div>
-
-            {issue.category ? (
-              <div className="space-y-4 text-xs">
-                {/* Visual grid for Category, Severity, and Department */}
-                <div className="grid grid-cols-2 gap-3 font-medium">
-                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
-                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Category</span>
-                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.category.replace("_", " ")}</p>
-                  </div>
-                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
-                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Severity</span>
-                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.severity}</p>
-                  </div>
-                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1 col-span-2">
-                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Recommended Department</span>
-                    <p className="text-[#1A1A1A] text-sm font-semibold">{issue.recommendedDepartment}</p>
-                  </div>
-                </div>
-
-                {/* Confidence Level (Development-only) */}
-                {issue.confidence !== undefined && (
-                  <div className="p-3 bg-[#F5F5F0]/50 border border-[#E5E0D8]/30 rounded-xl flex items-center justify-between">
-                    <span className="text-[#8A8A6F] font-semibold text-[10px] uppercase tracking-wider">Ingestion Confidence</span>
-                    <span className="font-mono font-bold text-[#1A1A1A] bg-white border border-[#E5E0D8]/50 px-2 py-0.5 rounded-md">
-                      {Math.round(issue.confidence * 100)}%
-                    </span>
-                  </div>
-                )}
-
-                {/* Visual Evidence Bullet Points */}
-                {issue.visualEvidence && issue.visualEvidence.length > 0 && (
-                  <div className="space-y-2 border-t border-[#F5F5F0] pt-3">
-                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider block">Visual Evidence</span>
-                    <ul className="space-y-1.5 list-disc pl-4 text-xs text-[#4A4A3A] font-medium">
-                      {issue.visualEvidence.map((point: string, idx: number) => (
-                        <li key={idx} className="leading-relaxed">{point}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-1.5 py-2">
-                <p className="text-[11px] text-[#8A8A6F] leading-normal">
-                  No AI Ingest metadata is available for this legacy report. Real-time Category and Severity classification are active on all new submissions.
-                </p>
-              </div>
-            )}
           </div>
 
           {/* Real-time Endorsement System Interface */}
@@ -1314,6 +1252,96 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
                 }`}
               >
                 {localToast.message}
+              </div>
+            )}
+          </div>
+
+          {/* DNA Audit Panel */}
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center gap-2 text-[#A37B5C]">
+              <Sparkles className="h-4 w-4" />
+              <span className="text-xs font-bold uppercase tracking-wider">Issue DNA Audit</span>
+            </div>
+
+            <p className="text-[11px] text-[#7A756D] leading-normal">
+              Immutable telemetry attributes registered directly on the decentralized ledger.
+            </p>
+
+            <div className="space-y-2 text-xs font-mono">
+              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
+                <span className="text-[#8A8A6F]">Re-open Count</span>
+                <span className="font-bold text-[#1A1A1A]">{issue.dna?.reopenCount ?? issue.reopenCount ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
+                <span className="text-[#8A8A6F]">Duplicate Reports</span>
+                <span className="font-bold text-[#1A1A1A]">{issue.dna?.duplicateReports || issue.dna?.duplicateCount || issue.duplicateReports || issue.duplicateCount || 0}</span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-lg">
+                <span className="text-[#8A8A6F]">Verification Count</span>
+                <span className="font-bold text-[#1A1A1A]">{issue.dna?.verificationCount || issue.endorsementCount || 0}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* AI Agent Analysis Card */}
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[#A37B5C]">
+                <Sparkles className="h-4 w-4" />
+                <span className="text-xs font-bold uppercase tracking-wider">AI Agent Analysis</span>
+              </div>
+              {issue.category && (
+                <span className="bg-emerald-50 text-emerald-800 text-[9px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded-md border border-emerald-200/45">
+                  Verified Ingestion
+                </span>
+              )}
+            </div>
+
+            {issue.category ? (
+              <div className="space-y-4 text-xs">
+                {/* Visual grid for Category, Severity, and Department */}
+                <div className="grid grid-cols-2 gap-3 font-medium">
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Category</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.category.replace("_", " ")}</p>
+                  </div>
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Severity</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold capitalize">{issue.severity}</p>
+                  </div>
+                  <div className="p-3 bg-[#FAF9F6] border border-[#E5E0D8]/40 rounded-xl space-y-1 col-span-2">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider">Recommended Department</span>
+                    <p className="text-[#1A1A1A] text-sm font-semibold">{issue.recommendedDepartment}</p>
+                  </div>
+                </div>
+
+                {/* Confidence Level (Development-only) */}
+                {issue.confidence !== undefined && (
+                  <div className="p-3 bg-[#F5F5F0]/50 border border-[#E5E0D8]/30 rounded-xl flex items-center justify-between">
+                    <span className="text-[#8A8A6F] font-semibold text-[10px] uppercase tracking-wider">Ingestion Confidence</span>
+                    <span className="font-mono font-bold text-[#1A1A1A] bg-white border border-[#E5E0D8]/50 px-2 py-0.5 rounded-md">
+                      {Math.round(issue.confidence * 100)}%
+                    </span>
+                  </div>
+                )}
+
+                {/* Visual Evidence Bullet Points */}
+                {issue.visualEvidence && issue.visualEvidence.length > 0 && (
+                  <div className="space-y-2 border-t border-[#F5F5F0] pt-3">
+                    <span className="text-[#8A8A6F] text-[10px] uppercase font-bold tracking-wider block">Visual Evidence</span>
+                    <ul className="space-y-1.5 list-disc pl-4 text-xs text-[#4A4A3A] font-medium">
+                      {issue.visualEvidence.map((point: string, idx: number) => (
+                        <li key={idx} className="leading-relaxed">{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1.5 py-2">
+                <p className="text-[11px] text-[#8A8A6F] leading-normal">
+                  No AI Ingest metadata is available for this legacy report. Real-time Category and Severity classification are active on all new submissions.
+                </p>
               </div>
             )}
           </div>

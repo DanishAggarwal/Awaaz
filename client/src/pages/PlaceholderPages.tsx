@@ -16,12 +16,37 @@ import {
 } from "lucide-react";
 
 /* ==========================================
-   1. NEARBY ISSUES (Lightweight Map Placeholder)
+   1. NEARBY ISSUES (Secure Spatial Intelligence Feed)
    ========================================== */
-export function NearbyIssues() {
+interface NearbyIssuesProps {
+  onViewIssue: (id: string) => void;
+}
+
+function distanceBetweenPoints(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371e3; // meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // in meters
+}
+
+export function NearbyIssues({ onViewIssue }: NearbyIssuesProps) {
   const [address, setAddress] = useState("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [detecting, setDetecting] = useState(false);
+  const [nearbyIssuesList, setNearbyIssuesList] = useState<any[]>([]);
+  const [loadingIssues, setLoadingIssues] = useState(false);
+  const [fallbackMode, setFallbackMode] = useState(false);
+
+  // Default coordinates: Bangalore City Hall (12.9716, 77.5946)
+  const defaultCoords = { lat: 12.9716, lng: 77.5946 };
 
   useEffect(() => {
     // Attempt auto-detect to show off high-fidelity browser geolocating
@@ -32,6 +57,7 @@ export function NearbyIssues() {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           setCoords({ lat, lng });
+          setFallbackMode(false);
           
           try {
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=16`);
@@ -47,59 +73,171 @@ export function NearbyIssues() {
           setDetecting(false);
         },
         () => {
+          // Denied or error - fallback to Bangalore City Hall
+          setCoords(defaultCoords);
+          setAddress("Bangalore Municipal Central Sector (Default Sector)");
+          setFallbackMode(true);
           setDetecting(false);
         }
       );
+    } else {
+      setCoords(defaultCoords);
+      setAddress("Bangalore Municipal Central Sector (Default Sector)");
+      setFallbackMode(true);
     }
   }, []);
 
+  // Fetch and filter issues securely
+  useEffect(() => {
+    if (!coords) return;
+
+    async function fetchNearby() {
+      try {
+        setLoadingIssues(true);
+        // Load public and group issues securely
+        const resPublic = await getIssues({ scope: "public" });
+        const resGroup = await getIssues({ scope: "my-groups" });
+
+        const combinedList = [
+          ...(resPublic?.data?.issues || []),
+          ...(resGroup?.data?.issues || [])
+        ];
+
+        // De-duplicate list
+        const uniqueIssues = combinedList.filter((issue, idx, self) => 
+          self.findIndex(i => i.id === issue.id) === idx
+        );
+
+        // Map and calculate distances, filter to 2.5km (2500m)
+        const mapped = uniqueIssues
+          .map((issue) => {
+            const loc = issue.location || {};
+            const lat = typeof loc.latitude === "number" ? loc.latitude : parseFloat(loc.latitude);
+            const lng = typeof loc.longitude === "number" ? loc.longitude : parseFloat(loc.longitude);
+            
+            if (isNaN(lat) || isNaN(lng)) {
+              return { ...issue, distance: null };
+            }
+            const distance = distanceBetweenPoints(coords.lat, coords.lng, lat, lng);
+            return { ...issue, distance };
+          })
+          .filter((issue) => issue.distance !== null && issue.distance <= 2500)
+          .sort((a, b) => (a.distance || 0) - (b.distance || 0));
+
+        setNearbyIssuesList(mapped);
+      } catch (err) {
+        console.error("Error fetching nearby issues:", err);
+      } finally {
+        setLoadingIssues(false);
+      }
+    }
+
+    fetchNearby();
+  }, [coords]);
+
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case "resolved": return "bg-emerald-50 text-emerald-800 border-emerald-100";
+      case "in_progress": return "bg-sky-50 text-sky-800 border-sky-100";
+      case "assigned": return "bg-indigo-50 text-indigo-800 border-indigo-100";
+      default: return "bg-amber-50 text-amber-800 border-amber-100";
+    }
+  };
+
   return (
-    <div className="flex-grow flex flex-col font-sans p-6">
-      <header className="mb-6">
-        <h2 className="text-xl font-bold tracking-tight text-[#1A1A1A] font-serif">Nearby Civic Signals</h2>
-        <p className="text-xs text-[#7A756D] mt-0.5">Issues and telemetry reports within your immediate geographic sector.</p>
+    <div className="flex-grow flex flex-col font-sans p-6 animate-in fade-in duration-300">
+      <header className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-[#1A1A1A] font-serif flex items-center gap-2">
+            <Compass className="h-5 w-5 text-[#5A5A40]" />
+            <span>Nearby Civic Signals</span>
+          </h2>
+          <p className="text-xs text-[#7A756D] mt-0.5">Authorized issues and telemetry reports within your immediate geographic sector.</p>
+        </div>
+        <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-3 py-1 rounded-full self-start">
+          Spatial Grid active
+        </span>
       </header>
 
-      <div className="bg-white border border-[#E5E0D8] rounded-2xl p-6 shadow-xs flex-grow flex flex-col items-center justify-center text-center max-w-2xl mx-auto w-full my-auto">
-        <div className="h-14 w-14 rounded-full bg-[#FAF9F6] border border-[#E5E0D8] flex items-center justify-center text-[#5A5A40] mb-5 shadow-xs">
-          <Compass className={`h-6 w-6 ${detecting ? "animate-spin text-[#A37B5C]" : ""}`} />
+      {/* Geospatial Sector Details Card */}
+      <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-2xl p-4 mb-6">
+        <span className="text-[9px] font-bold text-[#7A756D] uppercase tracking-wider block mb-1">Your Mapped Sector</span>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <p className="text-xs font-semibold text-[#5A5A40] flex items-center gap-2 leading-relaxed">
+            <MapPin className="h-4 w-4 text-[#A37B5C] shrink-0" />
+            <span>{detecting ? "Triangulating coordinates..." : address}</span>
+          </p>
+          {fallbackMode && (
+            <span className="text-[9px] font-semibold text-amber-800 bg-amber-50 px-2.5 py-0.5 border border-amber-100 rounded-md shrink-0">
+              Using central sector baseline reference
+            </span>
+          )}
         </div>
+      </div>
 
-        <h3 className="text-base font-bold text-[#1A1A1A]">Geospatial Discovery Network</h3>
-        
-        {detecting ? (
-          <p className="text-xs text-[#7A756D] mt-2">Triangulating neighboring cell towers and satellite locks...</p>
-        ) : coords ? (
-          <div className="mt-4 space-y-4 w-full">
-            <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-4 inline-block text-left w-full max-w-md mx-auto">
-              <span className="text-[10px] font-bold text-[#7A756D] uppercase tracking-wider block mb-1">Your Mapped Sector</span>
-              <p className="text-xs font-semibold text-[#5A5A40] leading-relaxed flex items-start gap-2">
-                <MapPin className="h-4 w-4 text-[#A37B5C] shrink-0 mt-0.5" />
-                <span>{address || `Latitude: ${coords.lat.toFixed(5)}, Longitude: ${coords.lng.toFixed(5)}`}</span>
-              </p>
+      {/* Issues list within 2.5km */}
+      <div className="flex-grow flex flex-col">
+        {loadingIssues ? (
+          <div className="py-16 text-center space-y-3 flex-grow flex flex-col items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-[#5A5A40]" />
+            <p className="text-xs text-[#7A756D] font-medium">Scanning authorized sector ledger...</p>
+          </div>
+        ) : nearbyIssuesList.length === 0 ? (
+          <div className="bg-white border border-[#E5E0D8] rounded-2xl p-12 text-center max-w-md mx-auto w-full my-auto flex flex-col items-center gap-3">
+            <div className="h-12 w-12 rounded-full bg-[#FAF9F6] flex items-center justify-center text-[#A8A297] border border-[#E5E0D8]/40">
+              <Compass className="h-5 w-5" />
             </div>
-            <p className="text-xs text-[#7A756D] leading-relaxed max-w-sm mx-auto">
-              Awaaz's **Phase 2 Spatial Intelligence Grid** is currently under audit. Once deployed, neighboring complaints within a 2.5km radius will auto-populate as interactive pins.
+            <h3 className="text-sm font-bold text-[#1A1A1A]">No Local Signals</h3>
+            <p className="text-xs text-[#7A756D] leading-relaxed">
+              There are currently no active public or authorized group reports within 2.5km of your location.
             </p>
           </div>
         ) : (
-          <div className="mt-4 space-y-2">
-            <p className="text-xs text-[#7A756D] max-w-sm">
-              Please enable browser GPS permission to view civic issues in your immediate vicinity.
+          <div className="space-y-3 max-w-3xl w-full mx-auto">
+            <p className="text-[10px] font-bold text-[#A8A297] uppercase tracking-wider mb-2">
+              Found {nearbyIssuesList.length} local reports within a 2.5km sector radius
             </p>
-            <span className="text-[10px] text-[#A8A297] block italic">Coordinates are processed safely and are never stored without a submitted report.</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {nearbyIssuesList.map((issue) => {
+                const distKm = issue.distance !== null 
+                  ? issue.distance < 1000 
+                    ? `${Math.round(issue.distance)}m` 
+                    : `${(issue.distance / 1000).toFixed(2)}km`
+                  : "N/A";
+
+                return (
+                  <div 
+                    key={issue.id}
+                    onClick={() => onViewIssue(issue.id)}
+                    className="group bg-white border border-[#E5E0D8] hover:border-[#5A5A40] rounded-2xl p-4 shadow-xs transition-all duration-200 cursor-pointer flex flex-col justify-between hover:shadow-md"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[9px] font-mono font-bold text-[#7A756D] uppercase">{issue.category}</span>
+                        <span className={`px-2 py-0.5 border rounded-md font-bold font-mono text-[9px] uppercase tracking-wider ${getStatusBadgeColor(issue.status)}`}>
+                          {issue.status}
+                        </span>
+                      </div>
+                      <h4 className="text-sm font-extrabold text-[#1A1A1A] group-hover:text-[#5A5A40] transition-colors leading-snug line-clamp-1">{issue.title}</h4>
+                      <p className="text-[11px] text-[#7A756D] line-clamp-2 leading-relaxed">{issue.summary}</p>
+                    </div>
+
+                    <div className="border-t border-[#F5F5F0] mt-3 pt-3 flex items-center justify-between text-[10px]">
+                      <span className="text-[#5A5A40] font-bold flex items-center gap-1">
+                        <MapPin className="h-3 w-3 text-[#A37B5C]" />
+                        <span>{distKm} away</span>
+                      </span>
+                      <span className="text-[#A8A297] font-semibold flex items-center gap-0.5 group-hover:text-[#5A5A40] transition-colors">
+                        <span>Details</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
-
-        <div className="mt-8 border-t border-[#F5F5F0] pt-6 w-full flex items-center justify-between text-[11px] text-[#7A756D]">
-          <span className="font-semibold flex items-center gap-1.5">
-            <Layers className="h-4 w-4 text-[#5A5A40]" />
-            Telemetry Baseline: Active
-          </span>
-          <span className="text-[10px] bg-[#F5F5F0] border border-[#E5E0D8] px-2.5 py-1 rounded-md font-bold uppercase tracking-wider text-[#5A5A40]">
-            Phase 2 Pipeline
-          </span>
-        </div>
       </div>
     </div>
   );

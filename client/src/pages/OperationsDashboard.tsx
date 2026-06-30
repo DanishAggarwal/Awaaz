@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { getPermissions } from "../api";
+import { getPermissions, getIssues } from "../api";
 import DashboardLayout from "../components/dashboard/DashboardLayout";
 import DashboardCard from "../components/dashboard/DashboardCard";
 import IssueManagement from "../components/dashboard/IssueManagement";
+import AnalyticsView from "../components/dashboard/AnalyticsView";
 import { 
   AlertCircle, 
   Flame, 
@@ -13,7 +14,9 @@ import {
   Shield,
   Loader2,
   Lock,
-  ArrowRight
+  ArrowRight,
+  TrendingUp,
+  BarChart3
 } from "lucide-react";
 
 interface Scope {
@@ -37,6 +40,11 @@ export default function OperationsDashboard({
   const [scopes, setScopes] = useState<Scope[]>([]);
   const [selectedScope, setSelectedScope] = useState<Scope | null>(null);
   const [currentSection, setCurrentSection] = useState("dashboard");
+  
+  // Dynamic issues state
+  const [issues, setIssues] = useState<any[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
 
   // Load permissions and scopes on mount
   useEffect(() => {
@@ -96,6 +104,32 @@ export default function OperationsDashboard({
     };
   }, [onBackToCitizenFeed]);
 
+  // Load issues list based on scope
+  const loadDashboardData = async () => {
+    if (!selectedScope) return;
+    try {
+      setIssuesLoading(true);
+      setIssuesError(null);
+      const res = await getIssues({ groupId: selectedScope.id });
+      if (res && res.success && res.data) {
+        setIssues(res.data.issues || []);
+      } else {
+        setIssuesError(res?.error || "Failed to load dashboard data.");
+      }
+    } catch (err: any) {
+      console.error("Error loading dashboard issues:", err);
+      setIssuesError(err.message || "An error occurred.");
+    } finally {
+      setIssuesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedScope) {
+      loadDashboardData();
+    }
+  }, [selectedScope]);
+
   // Handle scope modification
   const handleScopeChange = (scope: Scope) => {
     setSelectedScope(scope);
@@ -107,10 +141,8 @@ export default function OperationsDashboard({
     const path = window.location.pathname;
     if (path === "/dashboard/issues") {
       setCurrentSection("issues");
-    } else if (path === "/dashboard/community") {
-      setCurrentSection("community");
-    } else if (path === "/dashboard/settings") {
-      setCurrentSection("settings");
+    } else if (path === "/dashboard/analytics") {
+      setCurrentSection("analytics");
     } else {
       setCurrentSection("dashboard");
     }
@@ -123,6 +155,9 @@ export default function OperationsDashboard({
       newPath = `/dashboard/${section}`;
     }
     window.history.pushState(null, "", newPath);
+    if (section === "dashboard" || section === "analytics") {
+      loadDashboardData();
+    }
   };
 
   // Safe logout wrapper
@@ -180,46 +215,38 @@ export default function OperationsDashboard({
       return <IssueManagement selectedScope={selectedScope} />;
     }
 
-    if (currentSection !== "dashboard") {
-      const sectionLabels: Record<string, string> = {
-        community: "Community Directory & Moderation",
-        settings: "Admin Settings"
-      };
-
-      const sectionDetails: Record<string, string> = {
-        community: "Monitor community memberships, roles, and group configurations.",
-        settings: "Configure notification thresholds, priority rules, and basic dashboard preferences."
-      };
-
-      const label = sectionLabels[currentSection] || "Administrative Module";
-      const detail = sectionDetails[currentSection] || "This feature is coming soon in a future update.";
-
+    if (currentSection === "analytics") {
       return (
-        <div className="bg-[#FDFCFB] rounded-3xl border border-[#E5E0D8] p-12 shadow-xs text-center flex flex-col items-center justify-center max-w-2xl mx-auto my-12 min-h-[350px]" id="dashboard-section-placeholder">
-          <div className="h-14 w-14 rounded-2xl bg-[#5A5A40]/5 border border-[#5A5A40]/10 flex items-center justify-center text-[#5A5A40] mb-6">
-            <Sparkles className="h-6 w-6 animate-pulse" />
-          </div>
-          <h2 className="text-xl font-bold text-[#1A1A1A] tracking-tight">{label}</h2>
-          <span className="text-[10px] font-bold font-mono text-[#5A5A40] uppercase tracking-widest bg-[#F5F5F0] px-2.5 py-1 rounded-full mt-2.5">
-            Coming Soon
-          </span>
-          <p className="text-xs text-[#7A756D] max-w-md mt-4 leading-relaxed">
-            {detail}
-          </p>
-          <button
-            onClick={() => setCurrentSection("dashboard")}
-            className="mt-8 text-xs font-bold text-[#5A5A40] hover:underline cursor-pointer flex items-center gap-1.5"
-          >
-            <span>Back to Dashboard</span>
-            <ArrowRight className="h-3 w-3" />
-          </button>
-        </div>
+        <AnalyticsView 
+          issues={issues} 
+          loading={issuesLoading} 
+          selectedScope={selectedScope} 
+        />
       );
     }
 
     const isAdminType = selectedScope?.id === "awaaz_public" || selectedScope?.type === "system" 
       ? "Municipal Administrator" 
       : "Community Administrator";
+
+    // Metrics calculations
+    const openCount = issues.filter(i => i.status !== "resolved").length;
+    const highPriorityCount = issues.filter(i => i.priorityScore >= 80).length;
+    const inProgressCount = issues.filter(i => i.status === "in_progress").length;
+    const resolvedCount = issues.filter(i => i.status === "resolved").length;
+
+    // AI insights metrics
+    const avgConfidence = issues.length > 0
+      ? (issues.reduce((sum, i) => sum + (i.confidence || 0), 0) / issues.length)
+      : 0;
+
+    const categoryCounts: Record<string, number> = {};
+    issues.forEach(i => {
+      const cat = i.category || "General";
+      categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+    });
+    const topCategory = Object.entries(categoryCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || "None";
 
     // Dashboard Home View
     return (
@@ -257,50 +284,58 @@ export default function OperationsDashboard({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <DashboardCard
               title="Open Issues"
-              value="--"
+              value={issuesLoading ? "--" : String(openCount)}
               subtitle="Active unresolved reports"
               icon={AlertCircle}
             />
             <DashboardCard
               title="High Priority"
-              value="--"
+              value={issuesLoading ? "--" : String(highPriorityCount)}
               subtitle="Priority score above 80"
               icon={Flame}
             />
             <DashboardCard
               title="In Progress"
-              value="--"
+              value={issuesLoading ? "--" : String(inProgressCount)}
               subtitle="Currently being resolved"
               icon={Clock}
             />
             <DashboardCard
               title="Resolved"
-              value="--"
-              subtitle="Closed in past 30 days"
+              value={issuesLoading ? "--" : String(resolvedCount)}
+              subtitle="Closed issues count"
               icon={CheckCircle2}
             />
           </div>
         </section>
 
-        {/* AI Roadmap */}
+        {/* Real Dynamic AI Insights Panel */}
         <section id="dashboard-ai-roadmap-section">
-          <div className="bg-[#FDFCFB] border border-[#E5E0D8] rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-            <div className="space-y-2">
+          <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-[#5A5A40]/10 text-[#5A5A40]">
                   <Sparkles className="h-4 w-4" />
                 </div>
                 <h3 className="text-xs font-bold uppercase tracking-widest text-[#5A5A40]">
-                  AI Features (Coming Soon)
+                  AI-Assisted Operations & Priority Insights
                 </h3>
               </div>
               <p className="text-xs text-[#7A756D] max-w-2xl leading-relaxed">
-                Advanced features including AI Insights for pattern analysis, the dispatch-automated Community Agent, and duplicate-filtering Truth Engine are currently under development and will be integrated in the next phase.
+                Telemetry analyses and category trends are calculated directly from active citizen reports. The Case Ingestion engine has recorded an average ingestion confidence of <strong className="text-[#4A4A3A]">{(avgConfidence * 100).toFixed(0)}%</strong>, with the primary civic hotspot currently identified as <strong className="text-[#4A4A3A]">{topCategory}</strong>.
               </p>
             </div>
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#A8A297] bg-[#F5F5F0] px-3 py-1 rounded-full shrink-0 font-mono">
-              Future Roadmap
-            </span>
+            
+            <div className="flex gap-4 self-stretch sm:self-auto shrink-0 font-mono text-[10px]">
+              <div className="bg-white border border-[#E5E0D8] rounded-xl px-4 py-3 text-center min-w-[110px] flex flex-col justify-center">
+                <span className="text-[#A8A297] font-bold uppercase tracking-wider block mb-1">Confidence</span>
+                <span className="text-[#4A4A3A] text-lg font-black block">{(avgConfidence * 100).toFixed(0)}%</span>
+              </div>
+              <div className="bg-white border border-[#E5E0D8] rounded-xl px-4 py-3 text-center min-w-[110px] flex flex-col justify-center">
+                <span className="text-[#A8A297] font-bold uppercase tracking-wider block mb-1">Top Vector</span>
+                <span className="text-[#4A4A3A] text-xs font-black block truncate max-w-[90px]">{topCategory}</span>
+              </div>
+            </div>
           </div>
         </section>
       </div>

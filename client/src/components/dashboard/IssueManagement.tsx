@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { 
   getIssues, 
+  getIssue,
   updateIssueStatus, 
   getComments, 
   createComment,
@@ -39,7 +40,8 @@ import {
   CheckCircle,
   PlayCircle,
   RotateCw,
-  RotateCcw
+  RotateCcw,
+  Layers
 } from "lucide-react";
 
 interface Scope {
@@ -167,8 +169,21 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     async function loadIssueDetails() {
       try {
         setIssueLoading(true);
+
+        // Fetch fresh detailed issue
+        let freshIssue = null;
+        try {
+          const issueRes = await getIssue(selectedIssueId);
+          if (issueRes && issueRes.success && issueRes.data && issueRes.data.issue) {
+            freshIssue = issueRes.data.issue;
+            setSelectedIssue(freshIssue);
+          }
+        } catch (err) {
+          console.error("Error fetching fresh issue:", err);
+        }
+
         // Find current issue from latest state
-        const matched = issues.find(i => i.id === selectedIssueId);
+        const matched = freshIssue || issues.find(i => i.id === selectedIssueId);
         if (matched) {
           setActiveImageIndex(0);
           setCommunityAnalysis(matched.communityAnalysis || null);
@@ -876,7 +891,7 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                   const priority = getPriorityInfo(issue.priorityScore);
                   const statusInfo = getStatusInfo(issue.status);
                   const StatusIcon = statusInfo.icon;
-                  const dupCount = issue.dna?.duplicateReports || 0;
+                  const dupCount = issue.dna?.duplicateReports || issue.dna?.duplicateCount || 0;
 
                   return (
                     <tr 
@@ -1297,7 +1312,7 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                   </div>
                   <div>
                     <span className="text-[10px] text-[#A8A297] block">Duplicate Submissions</span>
-                    <span className="font-semibold text-[#4A4A3A] font-mono">{selectedIssue.dna?.duplicateCount || 0} links</span>
+                    <span className="font-semibold text-[#4A4A3A] font-mono">{selectedIssue.dna?.duplicateCount || selectedIssue.dna?.duplicateReports || 0} links</span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-[10px] text-[#A8A297] block">Geographic Location</span>
@@ -1612,32 +1627,85 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                     </motion.div>
                   )}
                 </div>
+              </section>
 
-                {/* Official Resolution */}
-                <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-[#4A4A3A]">Official Resolution</span>
-                    <span className="text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1.5 py-0.5 rounded-md">Coming in future phase</span>
-                  </div>
-                  <p className="text-[10px] text-[#A8A297] italic">Municipal department assignments, SLA logs, and direct administrative tracking.</p>
+              {/* Dynamic Resolution Timeline Ledger */}
+              <section className="bg-white border border-[#E5E0D8] rounded-2xl p-4.5 space-y-3">
+                <div className="flex items-center gap-2 border-b border-[#E5E0D8]/60 pb-2.5">
+                  <Layers className="h-4.5 w-4.5 text-[#5A5A40]" />
+                  <h4 className="text-xs font-extrabold uppercase tracking-wide text-[#5A5A40]">Resolution Timeline Ledger</h4>
                 </div>
 
-                {/* Resolution Evidence */}
-                <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-[#4A4A3A]">Resolution Evidence</span>
-                    <span className="text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1.5 py-0.5 rounded-md">Coming in future phase</span>
+                <div className="space-y-3.5 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-[#E5E0D8]/50 pl-1">
+                  {/* Status history steps oldest first */}
+                  <div className="flex gap-3 relative text-xs">
+                    <div className="w-6 h-6 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center font-mono text-[9px] font-bold shrink-0 z-10">
+                      ●
+                    </div>
+                    <div>
+                      <h5 className="text-[11px] font-bold text-[#1A1A1A] uppercase tracking-wider">Issue Ingested</h5>
+                      <p className="text-[10px] text-[#7A756D] mt-0.5">Complaint officially logged on decentralized ledger.</p>
+                      <p className="text-[8px] text-[#A8A297] font-mono mt-0.5 font-semibold">
+                        {selectedIssue.createdAt ? new Date(selectedIssue.createdAt).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ""}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-[10px] text-[#A8A297] italic">Before/after photos, ground team telemetry, and citizen confirmation approvals.</p>
-                </div>
 
-                {/* Activity Timeline */}
-                <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-[#4A4A3A]">Activity Timeline</span>
-                    <span className="text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1.5 py-0.5 rounded-md">Coming in future phase</span>
-                  </div>
-                  <p className="text-[10px] text-[#A8A297] italic">Interactive step-by-step history logs of all operations and agent triggers.</p>
+                  {selectedIssue.statusHistory && [...selectedIssue.statusHistory].reverse().map((historyItem: any) => {
+                    const toStatus = historyItem.toStatus || "reported";
+                    let stepTitle = "Status Updated";
+                    let stepIcon = "✓";
+                    let iconColor = "bg-[#A37B5C] border-[#E5E0D8] text-white";
+                    
+                    if (toStatus === "verified") {
+                      stepTitle = "Community Verified";
+                      stepIcon = "✓";
+                      iconColor = "bg-[#A37B5C] text-white border-transparent";
+                    } else if (toStatus === "in_progress") {
+                      stepTitle = "Investigation Started";
+                      stepIcon = "⚙";
+                      iconColor = "bg-sky-600 text-white border-transparent";
+                    } else if (toStatus === "resolved") {
+                      stepTitle = "Issue Resolved";
+                      stepIcon = "✓";
+                      iconColor = "bg-emerald-600 text-white border-transparent";
+                    } else if (toStatus === "reopened") {
+                      stepTitle = "Issue Reopened";
+                      stepIcon = "🔄";
+                      iconColor = "bg-rose-600 text-white border-transparent";
+                    }
+
+                    return (
+                      <div key={historyItem.id} className="flex gap-3 relative text-xs">
+                        <div className={`w-6 h-6 rounded-full ${iconColor} flex items-center justify-center font-mono text-[9px] font-bold shrink-0 z-10 border`}>
+                          {stepIcon}
+                        </div>
+                        <div>
+                          <h5 className="text-[11px] font-bold text-[#1A1A1A] uppercase tracking-wider">{stepTitle}</h5>
+                          <p className="text-[10px] text-[#7A756D] mt-0.5">{historyItem.note || `Status transition from ${historyItem.fromStatus} to ${historyItem.toStatus}.`}</p>
+                          {historyItem.changedBy && (
+                            <p className="text-[9px] text-[#5A5A40] font-medium">By: {historyItem.changedBy}</p>
+                          )}
+                          <p className="text-[8px] text-[#A8A297] font-mono mt-0.5 font-semibold">
+                            {new Date(historyItem.timestamp).toLocaleString("en-IN", { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Active/Pending Step indicator */}
+                  {selectedIssue.status !== "resolved" && (
+                    <div className="flex gap-3 relative opacity-65 text-xs">
+                      <div className="w-6 h-6 rounded-full bg-[#FAF9F6] border border-dashed border-[#A8A297] text-[#A8A297] flex items-center justify-center font-mono text-[9px] font-bold shrink-0 z-10">
+                        ...
+                      </div>
+                      <div>
+                        <h5 className="text-[11px] font-bold text-[#7A756D] uppercase tracking-wider">Official Assignment</h5>
+                        <p className="text-[10px] text-[#8A8A6F] mt-0.5">Awaiting municipal officer response and field delegation.</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
 
