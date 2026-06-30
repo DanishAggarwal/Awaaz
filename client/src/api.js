@@ -2,7 +2,8 @@
  * API client for Awaaz.
  * All frontend API calls live here only.
  */
-import { auth } from "./firebase";
+import { collection, query, where, onSnapshot, orderBy, limit } from "firebase/firestore";
+import { auth, db } from "./firebase";
 
 const BASE_URL = "/api";
 
@@ -304,6 +305,191 @@ export async function rejectReopenRequest(id, rejectReason) {
     method: "POST",
     body: JSON.stringify({ rejectReason })
   });
+}
+
+const OperationType = {
+  CREATE: "create",
+  UPDATE: "update",
+  DELETE: "delete",
+  LIST: "list",
+  GET: "get",
+  WRITE: "write"
+};
+
+/**
+ * Handle Firestore errors according to security rules configuration.
+ */
+function handleFirestoreError(error, operationType, path) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error("Firestore Error in CommunityPulse: ", JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+/**
+ * Safely parse any date value (Firestore Timestamp, string, number, null) into ISO string.
+ */
+function safeParseDate(val) {
+  if (!val) return new Date().toISOString();
+  // If it's a Firestore Timestamp or object with toDate()
+  if (typeof val.toDate === "function") {
+    try {
+      return val.toDate().toISOString();
+    } catch (e) {
+      // fallback
+    }
+  }
+  // Check if it's an object with seconds or _seconds (sometimes returned by Firebase Admin or JSON serialization)
+  if (typeof val === "object") {
+    const seconds = val.seconds ?? val._seconds;
+    if (seconds !== undefined) {
+      return new Date(seconds * 1000).toISOString();
+    }
+  }
+  // If it's already a string or number
+  if (typeof val === "string" || typeof val === "number") {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString();
+    }
+  }
+  // Try direct conversion
+  try {
+    const fallback = new Date(val);
+    if (!isNaN(fallback.getTime())) {
+      return fallback.toISOString();
+    }
+  } catch (e) {
+    // ignore
+  }
+  return new Date().toISOString();
+}
+
+/**
+ * Subscribe in real-time to the Community Pulse activity stream.
+ * Fetches public issues + user-joined community issues.
+ * Removed orderBy to prevent index errors. Sorting is done in-memory.
+ */
+export function subscribeToCommunityPulse(groupIds, callback) {
+  console.log("CommunityPulse: Subscribing with group IDs:", groupIds);
+
+  // Query 1: Public issues (visibility == "public")
+  // Using limit(100) on a simple where query without orderBy is index-safe
+  const publicQuery = query(
+    collection(db, "issues"),
+    where("visibility", "==", "public"),
+    limit(100)
+  );
+
+  let groupQuery = null;
+  // If user has joined groups, query those issues as well
+  const validGroupIds = (groupIds || []).filter(id => id && id !== "awaaz_public");
+  if (validGroupIds.length > 0) {
+    // Firestore "in" queries are limited to 10 items
+    const chunkedIds = validGroupIds.slice(0, 10);
+    console.log("CommunityPulse: Querying private groups in chunk:", chunkedIds);
+    groupQuery = query(
+      collection(db, "issues"),
+      where("groupId", "in", chunkedIds),
+      limit(100)
+    );
+  }
+
+  let publicIssues = [];
+  let groupIssues = [];
+
+  const emitMerged = () => {
+    // Merge both lists, de-duplicating by document id
+    const mergedMap = new Map();
+    publicIssues.forEach(item => mergedMap.set(item.id, item));
+    groupIssues.forEach(item => mergedMap.set(item.id, item));
+
+    const mergedList = Array.from(mergedMap.values());
+    
+    // Sort in-memory by updatedAt desc (fallback to createdAt desc)
+    mergedList.sort((a, b) => {
+      const timeA = new Date(a.updatedAt || a.createdAt).getTime();
+      const timeB = new Date(b.updatedAt || b.createdAt).getTime();
+      return timeB - timeA;
+    });
+
+    console.log(`CommunityPulse: Emitting merged ${mergedList.length} unique issues.`);
+    callback(mergedList);
+  };
+
+  // Setup public issues subscription
+  const unsubscribePublic = onSnapshot(
+    publicQuery,
+    (snapshot) => {
+      console.log(`CommunityPulse: Public snapshot fired. Documents found: ${snapshot.size}`);
+      publicIssues = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        const createdAt = safeParseDate(data.createdAt);
+        const updatedAt = safeParseDate(data.updatedAt || data.createdAt);
+        publicIssues.push({
+          id: doc.id,
+          ...data,
+          createdAt,
+          updatedAt
+        });
+      });
+      emitMerged();
+    },
+    (error) => {
+      console.error("CommunityPulse: Public query failed with error:", error);
+      handleFirestoreError(error, OperationType.GET, "issues");
+    }
+  );
+
+  // Setup group issues subscription if applicable
+  let unsubscribeGroup = () => {};
+  if (groupQuery) {
+    unsubscribeGroup = onSnapshot(
+      groupQuery,
+      (snapshot) => {
+        console.log(`CommunityPulse: Group snapshot fired. Documents found: ${snapshot.size}`);
+        groupIssues = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          const createdAt = safeParseDate(data.createdAt);
+          const updatedAt = safeParseDate(data.updatedAt || data.createdAt);
+          groupIssues.push({
+            id: doc.id,
+            ...data,
+            createdAt,
+            updatedAt
+          });
+        });
+        emitMerged();
+      },
+      (error) => {
+        console.error("CommunityPulse: Group query failed with error:", error);
+        handleFirestoreError(error, OperationType.GET, "issues");
+      }
+    );
+  }
+
+  // Return function to cleanly unsubscribe from both listeners
+  return () => {
+    console.log("CommunityPulse: Cleaning up real-time subscriptions");
+    unsubscribePublic();
+    unsubscribeGroup();
+  };
 }
 
 
