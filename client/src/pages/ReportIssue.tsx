@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { auth } from "../firebase";
 import { createIssue, supportDuplicateIssue } from "../api";
 import { uploadImage } from "../utils/uploadImage";
+import ReopenRequestModal from "../components/ReopenRequestModal";
 import { 
   getCurrentLocation, 
   reverseGeocode, 
@@ -62,6 +63,7 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
   const [isSupportingDuplicate, setIsSupportingDuplicate] = useState(false);
   const [showAnywayConfirm, setShowAnywayConfirm] = useState(false);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [isReopenModalOpen, setIsReopenModalOpen] = useState(false);
 
   // Automatically trigger location detection on load to make UX smooth
   useEffect(() => {
@@ -617,9 +619,15 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
             </div>
 
             {/* Explanation card */}
-            <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-4 text-xs text-[#5A5A40] leading-relaxed">
-              A similar civic issue has already been reported nearby. Supporting the existing report helps the municipality understand the true community impact while avoiding duplicate reports.
-            </div>
+            {duplicateCandidate.status === "resolved" ? (
+              <div className="bg-amber-50/70 border border-amber-200/50 rounded-xl p-4 text-xs text-amber-800 font-semibold leading-relaxed animate-fade-in">
+                This issue was previously resolved. Has the problem returned?
+              </div>
+            ) : (
+              <div className="bg-[#FAF9F6] border border-[#E5E0D8] rounded-xl p-4 text-xs text-[#5A5A40] leading-relaxed">
+                A similar civic issue has already been reported nearby. Supporting the existing report helps the municipality understand the true community impact while avoiding duplicate reports.
+              </div>
+            )}
 
             {/* Existing Issue details */}
             <div className="bg-white border border-[#E5E0D8] rounded-xl p-4 space-y-3 shadow-xs">
@@ -666,7 +674,36 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
             )}
 
             {/* Support Confirmation or Anyway Confirmation Sub-UI */}
-            {showAnywayConfirm ? (
+            {duplicateCandidate.status === "resolved" ? (
+              <div className="flex flex-col gap-2.5 pt-2 animate-fade-in">
+                <button
+                  type="button"
+                  onClick={() => setIsReopenModalOpen(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#5A5A40] hover:bg-[#4A4A30] text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+                >
+                  🔄 Report Issue Reopened
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleViewExisting}
+                    className="px-3 py-2.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[11px] font-bold rounded-xl text-[#5A5A40] transition-colors cursor-pointer"
+                  >
+                    View Existing Issue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDuplicateDialog(false);
+                      setDuplicateCandidate(null);
+                    }}
+                    className="px-3 py-2.5 bg-white hover:bg-[#FAF9F6] border border-[#E5E0D8] text-[11px] font-bold rounded-xl text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : showAnywayConfirm ? (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
                 <p className="text-xs text-amber-900 leading-normal font-medium">
                   This appears to be a similar nearby issue. Continue only if your report concerns a different real-world problem.
@@ -743,6 +780,21 @@ export default function ReportIssue({ joinedGroups, onSuccess, onCancel, initial
             {/* TODO: Future versions may display Community Brief, Community Agent summary, Municipality progress, Resolution timeline */}
           </div>
         </div>
+      )}
+
+      {/* Reopen Request Modal */}
+      {duplicateCandidate && (
+        <ReopenRequestModal
+          issueId={duplicateCandidate.id}
+          isOpen={isReopenModalOpen}
+          onClose={() => setIsReopenModalOpen(false)}
+          onSuccess={() => {
+            const candidateId = duplicateCandidate.id;
+            setShowDuplicateDialog(false);
+            setDuplicateCandidate(null);
+            onSuccess({ id: candidateId }, "Reopen request submitted successfully for administrator review.");
+          }}
+        />
       )}
     </div>
   );

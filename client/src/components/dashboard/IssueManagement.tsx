@@ -6,8 +6,13 @@ import {
   getComments, 
   createComment,
   getCommunityAnalysis,
-  exportReportPDF
+  getTruthAnalysis,
+  exportReportPDF,
+  approveReopenRequest,
+  rejectReopenRequest
 } from "../../api";
+import { useAuth } from "../../context/AuthContext";
+import { uploadImage } from "../../utils/uploadImage";
 import { 
   Search, 
   ArrowUpDown, 
@@ -33,7 +38,8 @@ import {
   Info,
   CheckCircle,
   PlayCircle,
-  RotateCw
+  RotateCw,
+  RotateCcw
 } from "lucide-react";
 
 interface Scope {
@@ -75,6 +81,12 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
+  // Truth Analysis state
+  const [truthAnalysis, setTruthAnalysis] = useState<any | null>(null);
+  const [truthLoading, setTruthLoading] = useState(false);
+  const [truthError, setTruthError] = useState<string | null>(null);
+  const [truthAnalysisStatus, setTruthAnalysisStatus] = useState<string | null>(null);
+
   // Export Report state
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -87,6 +99,23 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     issueTitle: string;
   } | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  const { user } = useAuth();
+
+  // Resolution Modal state
+  const [resolutionModal, setResolutionModal] = useState<{
+    isOpen: boolean;
+    issueId: string;
+    issueTitle: string;
+  } | null>(null);
+
+  const [afterImageFile, setAfterImageFile] = useState<File | null>(null);
+  const [afterImagePreview, setAfterImagePreview] = useState<string>("");
+  const [resolutionNote, setResolutionNote] = useState<string>("");
+  const [internalNote, setInternalNote] = useState<string>("");
+  const [submittingResolution, setSubmittingResolution] = useState(false);
+  const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [isReopenActionPending, setIsReopenActionPending] = useState(false);
 
   // Load issues for the current scope
   useEffect(() => {
@@ -118,6 +147,8 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     setSelectedIssue(null);
     setCommunityAnalysis(null);
     setAnalysisError(null);
+    setTruthAnalysis(null);
+    setTruthError(null);
   }, [selectedScope]);
 
   // Keep selectedIssue synced with the issues list when it changes (Client-side sync only, no API calls)
@@ -141,8 +172,12 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
         if (matched) {
           setActiveImageIndex(0);
           setCommunityAnalysis(matched.communityAnalysis || null);
+          setTruthAnalysis(matched.truthAnalysis || null);
+          setTruthAnalysisStatus(matched.truthAnalysisStatus || null);
         } else {
           setCommunityAnalysis(null);
+          setTruthAnalysis(null);
+          setTruthAnalysisStatus(null);
         }
 
         // Fetch fresh comments
@@ -176,6 +211,41 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
           }
         } finally {
           setAnalysisLoading(false);
+        }
+
+        // Fetch fresh truth analysis dynamically if resolved or reopened
+        if (matched && (matched.status === "resolved" || matched.status === "reopened")) {
+          setTruthLoading(true);
+          setTruthError(null);
+          try {
+            const truthRes = await getTruthAnalysis(selectedIssueId);
+            if (truthRes && truthRes.success && truthRes.data) {
+              setTruthAnalysis(truthRes.data.truthAnalysis);
+              setTruthAnalysisStatus(truthRes.data.truthAnalysisStatus || null);
+              
+              // Sync with local issues list
+              setIssues(prev => prev.map(issue => {
+                if (issue.id === selectedIssueId) {
+                  return { 
+                    ...issue, 
+                    truthAnalysis: truthRes.data.truthAnalysis,
+                    truthAnalysisStatus: truthRes.data.truthAnalysisStatus || null
+                  };
+                }
+                return issue;
+              }));
+            }
+          } catch (err: any) {
+            console.error("Error fetching truth analysis:", err);
+            if (!matched || !matched.truthAnalysis) {
+              setTruthError(err.message || "Failed to load truth verification.");
+            }
+          } finally {
+            setTruthLoading(false);
+          }
+        } else {
+          setTruthAnalysis(null);
+          setTruthAnalysisStatus(null);
         }
       } catch (err) {
         console.error("Error loading issue comments:", err);
@@ -216,6 +286,77 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
       setAnalysisLoading(false);
     }
   };
+
+  // Handle regenerating Truth Analysis
+  const handleRegenerateTruth = async () => {
+    if (!selectedIssueId || truthLoading) return;
+
+    try {
+      setTruthLoading(true);
+      setTruthError(null);
+      setTruthAnalysisStatus("generating");
+      const res = await getTruthAnalysis(selectedIssueId, true); // force=true
+      if (res && res.success && res.data) {
+        setTruthAnalysis(res.data.truthAnalysis);
+        setTruthAnalysisStatus(res.data.truthAnalysisStatus || "completed");
+        
+        // Update the issue in the local list so the cache is synced in memory
+        setIssues(prev => prev.map(issue => {
+          if (issue.id === selectedIssueId) {
+            return { 
+              ...issue, 
+              truthAnalysis: res.data.truthAnalysis,
+              truthAnalysisStatus: res.data.truthAnalysisStatus || "completed"
+            };
+          }
+          return issue;
+        }));
+      } else {
+        setTruthError(res?.error || "Failed to regenerate truth verification.");
+        setTruthAnalysisStatus("failed");
+      }
+    } catch (err: any) {
+      console.error("Error regenerating truth analysis:", err);
+      setTruthError(err.message || "Failed to regenerate truth verification.");
+      setTruthAnalysisStatus("failed");
+    } finally {
+      setTruthLoading(false);
+    }
+  };
+
+  // Polling for Truth Analysis if it's currently generating
+  useEffect(() => {
+    if (truthAnalysisStatus !== "generating" || !selectedIssueId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await getTruthAnalysis(selectedIssueId);
+        if (res && res.success && res.data) {
+          if (res.data.truthAnalysisStatus !== "generating") {
+            setTruthAnalysis(res.data.truthAnalysis);
+            setTruthAnalysisStatus(res.data.truthAnalysisStatus || null);
+            
+            // Sync with local issues list
+            setIssues(prev => prev.map(issue => {
+              if (issue.id === selectedIssueId) {
+                return { 
+                  ...issue, 
+                  truthAnalysis: res.data.truthAnalysis,
+                  truthAnalysisStatus: res.data.truthAnalysisStatus || null
+                };
+              }
+              return issue;
+            }));
+            clearInterval(pollInterval);
+          }
+        }
+      } catch (err) {
+        console.error("Error polling truth analysis:", err);
+      }
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [truthAnalysisStatus, selectedIssueId]);
 
   // Handle exporting the civic report PDF
   const handleExportReport = async () => {
@@ -275,12 +416,114 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
 
   // Open confirmation modal for status changes
   const initiateStatusChange = (issueId: string, issueTitle: string, newStatus: string) => {
-    setConfirmModal({
-      isOpen: true,
-      issueId,
-      newStatus,
-      issueTitle
-    });
+    if (newStatus === "resolved") {
+      setResolutionModal({
+        isOpen: true,
+        issueId,
+        issueTitle
+      });
+      // Reset any previous state
+      setAfterImageFile(null);
+      setAfterImagePreview("");
+      setResolutionNote("");
+      setInternalNote("");
+      setResolutionError(null);
+    } else {
+      setConfirmModal({
+        isOpen: true,
+        issueId,
+        newStatus,
+        issueTitle
+      });
+    }
+  };
+
+  // Handle submitting the resolution evidence
+  const handleResolveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resolutionModal || submittingResolution) return;
+
+    if (!afterImageFile) {
+      setResolutionError("An after-work photograph is required.");
+      return;
+    }
+    if (!resolutionNote.trim()) {
+      setResolutionError("A resolution note is required.");
+      return;
+    }
+
+    try {
+      setSubmittingResolution(true);
+      setResolutionError(null);
+
+      // 1. Upload After Image
+      let afterImageUrl = "";
+      try {
+        afterImageUrl = await uploadImage(afterImageFile);
+      } catch (uploadErr: any) {
+        throw new Error(`Failed to upload after photo: ${uploadErr.message || uploadErr}`);
+      }
+
+      // 2. Commit Status change with resolution object
+      const resolutionPayload = {
+        afterImageUrl,
+        resolutionNote: resolutionNote.trim(),
+        internalNote: internalNote.trim()
+      };
+
+      const res = await updateIssueStatus(resolutionModal.issueId, "resolved", resolutionPayload);
+      if (res && res.success) {
+        // Construct the resolution block to update local client state
+        const resolutionDataLocal = {
+          resolvedBy: user?.displayName || user?.email || "Administrator",
+          resolvedAt: new Date().toISOString(),
+          afterImageUrl,
+          resolutionNote: resolutionNote.trim(),
+          internalNote: internalNote.trim()
+        };
+
+        // Update in parent issues state
+        setIssues(prev => prev.map(issue => {
+          if (issue.id === resolutionModal.issueId) {
+            return { 
+              ...issue, 
+              status: "resolved",
+              resolution: resolutionDataLocal,
+              truthAnalysisStatus: "generating",
+              truthAnalysis: null
+            };
+          }
+          return issue;
+        }));
+
+        // Update selected issue details if open
+        if (selectedIssue && selectedIssue.id === resolutionModal.issueId) {
+          setSelectedIssue((prev: any) => prev ? { 
+            ...prev, 
+            status: "resolved",
+            resolution: resolutionDataLocal,
+            truthAnalysisStatus: "generating",
+            truthAnalysis: null
+          } : null);
+          setTruthAnalysis(null);
+          setTruthAnalysisStatus("generating");
+        }
+
+        // Close modal and reset
+        setResolutionModal(null);
+        setAfterImageFile(null);
+        setAfterImagePreview("");
+        setResolutionNote("");
+        setInternalNote("");
+      } else {
+        setResolutionError(res?.error || "Failed to submit resolution.");
+      }
+    } catch (err: any) {
+      console.error("Error submitting resolution:", err);
+      setResolutionError(err.message || "An unexpected error occurred.");
+    } finally {
+      setSubmittingResolution(false);
+    }
   };
 
   // Commit the status update to backend
@@ -318,6 +561,90 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     }
   };
 
+  const handleApproveReopen = async () => {
+    if (!selectedIssue || isReopenActionPending) return;
+    
+    try {
+      setIsReopenActionPending(true);
+      const res = await approveReopenRequest(selectedIssue.id);
+      if (res && res.success) {
+        const updatedIssue = res.data?.issue || res.data;
+        
+        // Update in parent list
+        setIssues(prev => prev.map(issue => {
+          if (issue.id === selectedIssue.id) {
+            return {
+              ...issue,
+              status: "reopened",
+              reopenRequest: {
+                ...issue.reopenRequest,
+                status: "approved"
+              },
+              dna: {
+                ...issue.dna,
+                reopenCount: (issue.dna?.reopenCount || 0) + 1
+              },
+              resolution: null,
+              communityAnalysis: null
+            };
+          }
+          return issue;
+        }));
+
+        // Update selectedIssue with returned payload
+        setSelectedIssue(updatedIssue);
+        alert("Reopen request approved. Issue is now marked as Reopened.");
+      } else {
+        alert(res?.error || "Failed to approve reopen request.");
+      }
+    } catch (err: any) {
+      console.error("Error approving reopen:", err);
+      alert(err.message || "An unexpected error occurred.");
+    } finally {
+      setIsReopenActionPending(false);
+    }
+  };
+
+  const handleRejectReopen = async () => {
+    if (!selectedIssue || isReopenActionPending) return;
+    const rejectReason = window.prompt("Please provide a reason for rejecting this reopen request:");
+    if (rejectReason === null) return; // user cancelled prompt
+    
+    try {
+      setIsReopenActionPending(true);
+      const res = await rejectReopenRequest(selectedIssue.id, rejectReason);
+      if (res && res.success) {
+        const updatedIssue = res.data?.issue || res.data;
+        
+        // Update in parent list
+        setIssues(prev => prev.map(issue => {
+          if (issue.id === selectedIssue.id) {
+            return {
+              ...issue,
+              reopenRequest: {
+                ...issue.reopenRequest,
+                status: "rejected",
+                rejectReason
+              }
+            };
+          }
+          return issue;
+        }));
+
+        // Update selectedIssue with returned payload
+        setSelectedIssue(updatedIssue);
+        alert("Reopen request rejected successfully.");
+      } else {
+        alert(res?.error || "Failed to reject reopen request.");
+      }
+    } catch (err: any) {
+      console.error("Error rejecting reopen:", err);
+      alert(err.message || "An unexpected error occurred.");
+    } finally {
+      setIsReopenActionPending(false);
+    }
+  };
+
   // Format Helper for Dates
   const formatDate = (dateString: string) => {
     try {
@@ -343,6 +670,8 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
   const getStatusInfo = (status: string) => {
     const s = (status || "reported").toLowerCase();
     switch (s) {
+      case "reopened":
+        return { label: "Reopened", bg: "bg-orange-50 text-orange-800 border-orange-100/60", icon: RotateCcw };
       case "resolved":
         return { label: "Resolved", bg: "bg-emerald-50 text-emerald-800 border-emerald-100", icon: CheckCircle2 };
       case "in_progress":
@@ -567,10 +896,17 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
 
                       {/* Status Cell */}
                       <td className="py-3 px-4">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] border ${statusInfo.bg}`}>
-                          <StatusIcon className="h-3 w-3" />
-                          <span>{statusInfo.label}</span>
-                        </span>
+                        {issue.reopenRequest?.status === "pending" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] border bg-amber-50 text-amber-800 border-amber-200">
+                            <AlertTriangle className="h-3 w-3 text-amber-600 animate-pulse" />
+                            <span>Reopen Requested</span>
+                          </span>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] border ${statusInfo.bg}`}>
+                            <StatusIcon className="h-3 w-3" />
+                            <span>{statusInfo.label}</span>
+                          </span>
+                        )}
                       </td>
 
                       {/* Title Cell */}
@@ -751,6 +1087,53 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                   </div>
                 </div>
 
+                {/* Reopen Request Pending Review Block */}
+                {selectedIssue.reopenRequest?.status === "pending" && (
+                  <div className="bg-amber-50/60 border border-amber-200/50 rounded-xl p-3.5 space-y-3 animate-fade-in text-xs">
+                    <div className="flex items-center gap-1.5 text-amber-900 font-bold">
+                      <span className="text-sm">⚠️</span>
+                      <span>Reopen Request Review</span>
+                    </div>
+
+                    <div className="space-y-1 bg-white p-2.5 rounded-lg border border-amber-100/60 shadow-2xs">
+                      <div className="text-[9px] uppercase font-bold text-[#A8A297] tracking-wider">Citizen Reason</div>
+                      <p className="text-[#4A4A3A] font-medium leading-relaxed">{selectedIssue.reopenRequest.reason}</p>
+                    </div>
+
+                    {selectedIssue.reopenRequest.photoUrl && (
+                      <div className="border border-amber-100/40 rounded-lg overflow-hidden max-h-32 bg-white flex items-center justify-center">
+                        <img src={selectedIssue.reopenRequest.photoUrl} alt="Reopen evidence" className="w-full object-cover max-h-32" />
+                      </div>
+                    )}
+
+                    <div className="flex justify-between text-[9px] font-bold text-[#8A8A6F] uppercase">
+                      <span>By: {selectedIssue.reopenRequest.requestedBy}</span>
+                      <span>
+                        {selectedIssue.reopenRequest.requestedAt ? new Date(selectedIssue.reopenRequest.requestedAt).toLocaleString("en-IN", {
+                          day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+                        }) : "Recently"}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={handleApproveReopen}
+                        disabled={isReopenActionPending}
+                        className="flex-1 py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                      >
+                        {isReopenActionPending ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : "✓"} Approve
+                      </button>
+                      <button
+                        onClick={handleRejectReopen}
+                        disabled={isReopenActionPending}
+                        className="flex-1 py-1.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-40"
+                      >
+                        {isReopenActionPending ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : "✕"} Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* PDF Export Section */}
                 <div className="pt-2 border-t border-[#E5E0D8]/40">
                   <button
@@ -827,6 +1210,74 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                   </p>
                 </div>
               </section>
+
+              {/* Resolution Evidence section */}
+              {selectedIssue.status === "resolved" && (
+                <section className="bg-white border border-[#E5E0D8] rounded-2xl p-4.5 space-y-4">
+                  <div className="flex items-center gap-1.5 border-b border-[#E5E0D8]/60 pb-2">
+                    <CheckCircle className="h-4 w-4 text-emerald-600" />
+                    <h4 className="text-xs font-extrabold uppercase tracking-wide text-[#5A5A40]">Resolution Evidence</h4>
+                  </div>
+
+                  {selectedIssue.resolution ? (
+                    <div className="space-y-4">
+                      {/* After Work Photo */}
+                      {selectedIssue.resolution.afterImageUrl ? (
+                        <div className="border border-[#E5E0D8] rounded-2xl overflow-hidden bg-white max-h-60 flex items-center justify-center">
+                          <img 
+                            src={selectedIssue.resolution.afterImageUrl} 
+                            alt="After Work Photograph" 
+                            className="w-full object-cover max-h-60" 
+                          />
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-[#A8A297] italic">No photograph uploaded.</p>
+                      )}
+
+                      {/* Notes */}
+                      <div>
+                        <h5 className="text-[10px] font-bold uppercase tracking-wider text-[#A8A297] mb-1">Resolution Note</h5>
+                        <p className="text-xs text-[#4A4A3A] leading-relaxed whitespace-pre-wrap bg-emerald-50/40 p-3 rounded-xl border border-emerald-100/60 font-medium">
+                          {selectedIssue.resolution.resolutionNote || "No note recorded."}
+                        </p>
+                      </div>
+
+                      {selectedIssue.resolution.internalNote && (
+                        <div>
+                          <h5 className="text-[10px] font-bold uppercase tracking-wider text-amber-700/80 mb-1 flex items-center gap-1">
+                            <span>Internal Operational Remarks</span>
+                            <span className="text-[8px] text-[#A8A297] font-normal italic">(Visible only to administrators)</span>
+                          </h5>
+                          <p className="text-xs text-[#7A756D] leading-relaxed whitespace-pre-wrap bg-amber-50/20 p-3 rounded-xl border border-amber-100/40">
+                            {selectedIssue.resolution.internalNote}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Sign-off metadata */}
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#E5E0D8]/40 text-xs">
+                        <div>
+                          <span className="text-[10px] text-[#A8A297] block">Resolved By</span>
+                          <span className="font-semibold text-[#4A4A3A]">{selectedIssue.resolution.resolvedBy || "Administrator"}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-[#A8A297] block">Resolved Date</span>
+                          <span className="font-semibold text-[#4A4A3A]">
+                            {selectedIssue.resolution.resolvedAt ? new Date(selectedIssue.resolution.resolvedAt).toLocaleDateString("en-IN", {
+                              day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+                            }) : "N/A"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-amber-50/40 border border-amber-100/60 rounded-xl text-center">
+                      <p className="text-xs text-amber-800 font-medium">No resolution evidence available.</p>
+                      <p className="text-[10px] text-[#7A756D] mt-0.5">This issue was resolved historically without structured audit trails.</p>
+                    </div>
+                  )}
+                </section>
+              )}
 
               {/* Issue DNA */}
               <section className="bg-white border border-[#E5E0D8] rounded-2xl p-4.5 space-y-3.5">
@@ -1022,10 +1473,144 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                 {/* Truth Engine */}
                 <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-[#4A4A3A]">Truth Engine</span>
-                    <span className="text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1.5 py-0.5 rounded-md">Coming in future phase</span>
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-[#5A5A40]" />
+                      <span className="text-[11px] font-bold text-[#4A4A3A]">Truth Engine Verification</span>
+                    </div>
+                    {selectedIssue?.status === "resolved" || selectedIssue?.status === "reopened" ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleRegenerateTruth}
+                          disabled={truthLoading}
+                          className="text-[8px] font-bold text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-1.5 py-0.5 rounded hover:bg-[#F5F5F0] transition-colors cursor-pointer flex items-center gap-0.5"
+                          title="Force Truth Engine Audit"
+                        >
+                          <RotateCw className={`h-2 w-2 ${truthLoading ? "animate-spin" : ""}`} />
+                          Re-run Verification
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-[8px] font-mono font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded-md">Pending Resolution</span>
+                    )}
                   </div>
-                  <p className="text-[10px] text-[#A8A297] italic">Automated cross-jurisdiction analysis, duplicate verification, and satellite audit checks.</p>
+
+                  {!(selectedIssue?.status === "resolved" || selectedIssue?.status === "reopened") ? (
+                    <p className="text-[10px] text-[#A8A297] italic mt-1.5">Truth verification is pending. This audit runs automatically when the issue is resolved.</p>
+                  ) : (truthAnalysisStatus === "generating" || (truthLoading && !truthAnalysis)) ? (
+                    <div className="py-4 flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-[#5A5A40]" />
+                      <p className="text-[9px] text-[#A8A297] font-medium animate-pulse text-center">
+                        Generating Truth Verification...
+                      </p>
+                    </div>
+                  ) : (truthAnalysisStatus === "failed" || (truthError && !truthAnalysis)) ? (
+                    <div className="py-2 text-center space-y-1.5">
+                      <p className="text-[9px] text-rose-600 font-medium">{truthError || "Truth verification pending."}</p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateTruth}
+                        className="text-[8px] font-bold text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-2 py-0.5 rounded hover:bg-[#F5F5F0] transition-colors cursor-pointer"
+                      >
+                        Retry Verification
+                      </button>
+                    </div>
+                  ) : !truthAnalysis ? (
+                    <div className="py-3 text-center space-y-1.5">
+                      <p className="text-[9px] text-[#A8A297] italic">Truth verification has not yet been performed.</p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateTruth}
+                        className="text-[9px] font-bold text-white bg-[#5A5A40] px-3 py-1 rounded-md hover:bg-[#4A4A30] transition-colors cursor-pointer flex items-center gap-1 mx-auto"
+                      >
+                        <Sparkles className="h-2.5 w-2.5" />
+                        Run Truth Audit
+                      </button>
+                    </div>
+                  ) : (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      transition={{ duration: 0.35, ease: "easeOut" }}
+                      className="space-y-3 mt-2"
+                    >
+                      {/* Status and Confidence */}
+                      <div className="flex items-center justify-between border-b border-[#E5E0D8]/40 pb-1.5">
+                        <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md border ${
+                          truthAnalysis.verificationStatus === "Verified"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                            : truthAnalysis.verificationStatus === "Likely Verified"
+                            ? "bg-cyan-50 text-cyan-700 border-cyan-100"
+                            : truthAnalysis.verificationStatus === "Needs Review"
+                            ? "bg-amber-50 text-amber-700 border-amber-100 animate-pulse"
+                            : "bg-rose-50 text-rose-700 border-rose-100"
+                        }`}>
+                          {truthAnalysis.verificationStatus}
+                        </span>
+
+                        <span className="text-[9px] font-mono font-bold text-[#4A4A3A]">
+                          Confidence Rating: {Math.round((truthAnalysis.confidence || 0) * 100)}%
+                        </span>
+                      </div>
+
+                      {/* Outdated Cache Warning */}
+                      {truthAnalysis.isOutdated && (
+                        <div className="bg-amber-50 border border-amber-100 text-amber-800 text-[9px] p-2 rounded-md flex items-center gap-1.5 leading-snug">
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                          <span>Verification may be outdated (changes detected).</span>
+                        </div>
+                      )}
+
+                      {/* Executive Summary */}
+                      <div>
+                        <h5 className="text-[8px] font-bold uppercase tracking-wider text-[#A8A297] mb-0.5">Executive Summary</h5>
+                        <p className="text-[10px] text-[#4A4A3A] leading-relaxed bg-[#FAF9F6] p-2.5 rounded-lg border border-[#E5E0D8]/40">
+                          {truthAnalysis.verificationSummary}
+                        </p>
+                      </div>
+
+                      {/* Visual Assessment */}
+                      {truthAnalysis.visualAssessment && (
+                        <div>
+                          <h5 className="text-[8px] font-bold uppercase tracking-wider text-[#A8A297] mb-0.5">Visual Evidence Check</h5>
+                          <p className="text-[10px] text-[#4A4A3A] leading-relaxed italic bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                            {truthAnalysis.visualAssessment}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Remaining Concerns */}
+                      {truthAnalysis.remainingConcerns && truthAnalysis.remainingConcerns.length > 0 && (
+                        <div>
+                          <h5 className="text-[8px] font-bold uppercase tracking-wider text-amber-800 mb-1 flex items-center gap-1">
+                            <AlertTriangle className="h-3 w-3 text-amber-600" />
+                            Remaining Concerns
+                          </h5>
+                          <ul className="space-y-1">
+                            {truthAnalysis.remainingConcerns.map((concern: string, idx: number) => (
+                              <li key={idx} className="flex items-start gap-1 text-[10px] text-amber-900 leading-tight">
+                                <span className="text-amber-500">•</span>
+                                <span>{concern}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Recommendation */}
+                      {truthAnalysis.recommendation && (
+                        <div className="bg-[#5A5A40]/5 border border-[#5A5A40]/10 rounded-lg p-2.5 text-[10px] text-[#4A4A3A] leading-normal">
+                          <span className="font-extrabold uppercase tracking-wider text-[8px] text-[#5A5A40] block mb-0.5">Independent Operational Recommendation</span>
+                          <p className="font-medium">{truthAnalysis.recommendation}</p>
+                        </div>
+                      )}
+
+                      {/* Metadata Timestamp */}
+                      <div className="text-[7.5px] font-mono text-[#A8A297] text-right pt-1 border-t border-[#E5E0D8]/10">
+                        Audited: {new Date(truthAnalysis.generatedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </motion.div>
+                  )}
                 </div>
 
                 {/* Official Resolution */}
@@ -1165,6 +1750,153 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Evidence-Based Resolution Modal */}
+      {resolutionModal?.isOpen && (
+        <div className="fixed inset-0 z-55 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="fixed inset-0 bg-black/45 animate-fade-in" onClick={() => !submittingResolution && setResolutionModal(null)} />
+          <div className="relative bg-[#FAF9F6] border border-[#E5E0D8] rounded-3xl p-6 max-w-lg w-full shadow-2xl flex flex-col gap-5 text-left z-10 animate-scale-up">
+            
+            <div className="flex items-start justify-between border-b border-[#E5E0D8]/60 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#1A1A1A] tracking-tight">Evidence-Based Resolution</h3>
+                <p className="text-[11px] text-[#7A756D] mt-0.5">
+                  Filing resolution evidence for <span className="font-semibold text-[#4A4A3A]">"{resolutionModal.issueTitle}"</span>
+                </p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => !submittingResolution && setResolutionModal(null)}
+                className="text-[#7A756D] hover:text-[#1A1A1A] transition-colors cursor-pointer"
+                disabled={submittingResolution}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleResolveSubmit} className="space-y-4">
+              {/* After Photo Upload */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[#4A4A3A] flex items-center gap-1">
+                  <span>After Work Photograph</span>
+                  <span className="text-rose-500 font-normal">*Required</span>
+                </label>
+                
+                {afterImagePreview ? (
+                  <div className="relative border border-[#E5E0D8] rounded-2xl overflow-hidden bg-white group h-40 flex items-center justify-center">
+                    <img 
+                      src={afterImagePreview} 
+                      alt="After work preview" 
+                      className="h-full w-full object-cover" 
+                    />
+                    <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAfterImageFile(null);
+                          setAfterImagePreview("");
+                        }}
+                        className="py-1 px-3 bg-rose-600 text-white rounded-lg text-xs font-semibold hover:bg-rose-700 transition-colors cursor-pointer"
+                        disabled={submittingResolution}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="border border-dashed border-[#C5C0B8] rounded-2xl p-6 bg-white hover:bg-[#FDFDFB] transition-colors flex flex-col items-center justify-center text-center">
+                    <ImageIcon className="h-8 w-8 text-[#A8A297] mb-2" />
+                    <p className="text-xs font-semibold text-[#4A4A3A]">Select after photo</p>
+                    <p className="text-[10px] text-[#A8A297] mt-0.5">JPEG, PNG up to 10MB</p>
+                    <label className="mt-3 py-1.5 px-4 bg-[#FAF9F6] border border-[#E5E0D8] hover:bg-[#F5F5F0] text-[#5A5A40] text-xs font-bold rounded-xl transition-all cursor-pointer">
+                      <span>Browse Files</span>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            const file = e.target.files[0];
+                            setAfterImageFile(file);
+                            setAfterImagePreview(URL.createObjectURL(file));
+                          }
+                        }}
+                        className="hidden" 
+                        disabled={submittingResolution}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Resolution Note */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[#4A4A3A] flex items-center gap-1">
+                  <span>Resolution Note</span>
+                  <span className="text-rose-500 font-normal">*Required</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={resolutionNote}
+                  onChange={(e) => setResolutionNote(e.target.value)}
+                  placeholder="Explain what work was performed, what was repaired, and any remaining site observations..."
+                  className="w-full text-xs p-3 rounded-2xl bg-white border border-[#E5E0D8] focus:border-[#5A5A40] focus:ring-1 focus:ring-[#5A5A40] outline-none transition-all placeholder:text-[#A8A297]"
+                  disabled={submittingResolution}
+                />
+              </div>
+
+              {/* Internal Note */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-[#4A4A3A] flex items-center gap-1.5">
+                  <span>Internal Operational Notes</span>
+                  <span className="text-[9px] text-[#A8A297] font-normal italic">(Admin Only - Private)</span>
+                </label>
+                <textarea
+                  rows={2}
+                  value={internalNote}
+                  onChange={(e) => setInternalNote(e.target.value)}
+                  placeholder="Internal notes, SLA remarks, contractor details, or future follow-up schedules..."
+                  className="w-full text-xs p-3 rounded-2xl bg-white border border-[#E5E0D8] focus:border-[#5A5A40] focus:ring-1 focus:ring-[#5A5A40] outline-none transition-all placeholder:text-[#A8A297]"
+                  disabled={submittingResolution}
+                />
+              </div>
+
+              {/* Error Display */}
+              {resolutionError && (
+                <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                  <p className="text-xs font-medium text-rose-700">{resolutionError}</p>
+                </div>
+              )}
+
+              {/* Form Buttons */}
+              <div className="flex gap-2.5 pt-2 border-t border-[#E5E0D8]/40">
+                <button
+                  type="button"
+                  onClick={() => setResolutionModal(null)}
+                  className="flex-1 py-2.5 px-4 bg-white border border-[#E5E0D8] text-[#7A756D] text-xs font-bold rounded-xl hover:bg-[#F5F5F0] transition-colors cursor-pointer"
+                  disabled={submittingResolution}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 px-4 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                  disabled={submittingResolution}
+                >
+                  {submittingResolution ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      <span>Submitting...</span>
+                    </>
+                  ) : (
+                    <span>Complete Resolution</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

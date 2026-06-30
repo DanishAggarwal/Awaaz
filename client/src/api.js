@@ -147,6 +147,14 @@ export async function getCommunityAnalysis(id, force = false) {
 }
 
 /**
+ * Protected: Get or generate Truth Verification for a specific issue.
+ * Matches GET /api/issues/:id/truth-analysis
+ */
+export async function getTruthAnalysis(id, force = false) {
+  return apiRequest(`/issues/${id}/truth-analysis${force ? "?force=true" : ""}`);
+}
+
+/**
  * Protected: Get list of issues matching scope and/or groupId.
  * Matches GET /api/issues
  */
@@ -166,10 +174,10 @@ export async function getIssues(params = {}) {
  * Protected: Update status of a civic issue (Admin only).
  * Matches PATCH /api/issues/:id
  */
-export async function updateIssueStatus(id, status) {
+export async function updateIssueStatus(id, status, resolution) {
   return apiRequest(`/issues/${id}`, {
     method: "PATCH",
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, resolution })
   });
 }
 
@@ -265,5 +273,38 @@ export async function exportReportPDF(id) {
   }
   return response.blob();
 }
+
+/**
+ * Protected: Submit a reopen request for a resolved issue.
+ * Matches POST /api/issues/:id/reopen-request
+ */
+export async function submitReopenRequest(id, reason, photoUrl) {
+  return apiRequest(`/issues/${id}/reopen-request`, {
+    method: "POST",
+    body: JSON.stringify({ reason, photoUrl })
+  });
+}
+
+/**
+ * Protected: Approve a reopen request (Admin only).
+ * Matches POST /api/issues/:id/reopen/approve
+ */
+export async function approveReopenRequest(id) {
+  return apiRequest(`/issues/${id}/reopen/approve`, {
+    method: "POST"
+  });
+}
+
+/**
+ * Protected: Reject a reopen request (Admin only).
+ * Matches POST /api/issues/:id/reopen/reject
+ */
+export async function rejectReopenRequest(id, rejectReason) {
+  return apiRequest(`/issues/${id}/reopen/reject`, {
+    method: "POST",
+    body: JSON.stringify({ rejectReason })
+  });
+}
+
 
 

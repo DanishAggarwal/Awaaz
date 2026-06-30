@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { getIssue, endorseIssue, getComments, createComment, updateComment, deleteComment } from "../api";
+import { getIssue, endorseIssue, getComments, createComment, updateComment, deleteComment, getTruthAnalysis } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../../../server/config/constants";
+import ReopenRequestModal from "../components/ReopenRequestModal";
 import { 
   MapPin, 
   Flame, 
@@ -21,7 +22,9 @@ import {
   ChevronRight,
   Maximize2,
   Edit2,
-  Trash2
+  Trash2,
+  RotateCw,
+  AlertTriangle
 } from "lucide-react";
 
 interface IssueDetailProps {
@@ -39,6 +42,8 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
   const [isFullscreenImage, setIsFullscreenImage] = useState(false);
   const [localToast, setLocalToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [endorsingPending, setEndorsingPending] = useState(false);
+  const [truthLoading, setTruthLoading] = useState(false);
+  const [truthError, setTruthError] = useState<string | null>(null);
 
   const commentsSectionRef = React.useRef<HTMLDivElement>(null);
   const commentInputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -50,6 +55,7 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
   const [submittingComment, setSubmittingComment] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [isReopenModalOpen, setIsReopenModalOpen] = useState(false);
 
   useEffect(() => {
     if (scrollToComments && !loading) {
@@ -265,6 +271,7 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
 
   const handleEndorseClick = async () => {
     if (endorsingPending || !issue) return;
+    if (issue.status === "resolved" || issue.status === "reopened") return;
 
     // Save previous state for rollback
     const prevEndorsed = !!issue.endorsed;
@@ -362,6 +369,55 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
     }
     loadIssue();
   }, [issueId]);
+
+  // Handle refreshing Truth Analysis from Citizen view
+  const handleRefreshTruth = async () => {
+    if (!issue || truthLoading) return;
+    setTruthLoading(true);
+    setTruthError(null);
+    try {
+      const res = await getTruthAnalysis(issue.id, true); // force=true
+      if (res && res.success && res.data) {
+        setIssue((prev: any) => prev ? {
+          ...prev,
+          truthAnalysis: res.data.truthAnalysis,
+          truthAnalysisStatus: res.data.truthAnalysisStatus || "completed"
+        } : null);
+      } else {
+        setTruthError(res?.error || "Failed to refresh truth verification.");
+      }
+    } catch (err: any) {
+      console.error("Error refreshing truth verification:", err);
+      setTruthError(err.message || "Failed to refresh truth verification.");
+    } finally {
+      setTruthLoading(false);
+    }
+  };
+
+  // Polling for Truth Analysis on citizen view if status is currently generating
+  useEffect(() => {
+    if (!issue || issue.truthAnalysisStatus !== "generating") return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await getTruthAnalysis(issue.id);
+        if (res && res.success && res.data) {
+          if (res.data.truthAnalysisStatus !== "generating") {
+            setIssue((prev: any) => prev ? {
+              ...prev,
+              truthAnalysis: res.data.truthAnalysis,
+              truthAnalysisStatus: res.data.truthAnalysisStatus || null
+            } : null);
+            clearInterval(pollInterval);
+          }
+        }
+      } catch (err) {
+        console.error("Error polling truth verification on citizen view:", err);
+      }
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [issue?.id, issue?.truthAnalysisStatus]);
 
   if (loading) {
     return (
@@ -604,6 +660,201 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
                 </div>
               </div>
             </div>
+
+            {/* Citizens Resolution Evidence view */}
+            {issue.status === "resolved" && (
+              <div className="bg-emerald-50/20 border-2 border-emerald-500/10 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-2 border-b border-emerald-500/10 pb-2.5">
+                  <span className="text-base">🎉</span>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-[#1A1A1A] tracking-tight">Issue Resolved</h3>
+                    <p className="text-[10px] text-[#7A756D] mt-0.5">Verified public works and municipal completion evidence.</p>
+                  </div>
+                </div>
+
+                {issue.resolution ? (
+                  <div className="space-y-4">
+                    {/* Resolution Photo */}
+                    {issue.resolution.afterImageUrl && (
+                      <div className="border border-[#E5E0D8] rounded-2xl overflow-hidden bg-white max-h-64 flex items-center justify-center shadow-xs">
+                        <img 
+                          src={issue.resolution.afterImageUrl} 
+                          alt="Resolution Evidence" 
+                          className="w-full object-cover max-h-64" 
+                        />
+                      </div>
+                    )}
+
+                    {/* Resolution Note */}
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-[#A8A297]">Resolution Note</div>
+                      <p className="text-sm text-[#4A4A3A] leading-relaxed whitespace-pre-wrap font-sans font-medium bg-white border border-[#E5E0D8] p-4 rounded-xl">
+                        {issue.resolution.resolutionNote}
+                      </p>
+                    </div>
+
+                    {/* Metadata */}
+                    <div className="flex justify-between items-center text-xs text-[#7A756D] pt-1">
+                      <span>Completed by <strong>Awaaz Operations</strong></span>
+                      <span>
+                        {issue.resolution.resolvedAt ? new Date(issue.resolution.resolvedAt).toLocaleDateString("en-IN", {
+                          day: "numeric", month: "short", year: "numeric"
+                        }) : "Recently"}
+                      </span>
+                    </div>
+
+                    {/* Citizen Reopen Request Actions & Status inside resolution card */}
+                    <div className="border-t border-emerald-500/10 pt-4 mt-4 space-y-3">
+                      {issue.reopenRequest?.status === "pending" ? (
+                        <div className="bg-amber-50/75 border border-amber-200/60 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center gap-2 text-amber-800 font-bold text-xs">
+                            <span className="text-sm">⚠️</span>
+                            <span>Reopen Request Pending Admin Review</span>
+                          </div>
+                          <div className="text-xs text-[#5A5A40] leading-relaxed">
+                            <span className="font-semibold block text-[10px] uppercase text-[#7A756D] mb-1">Citizen Reason:</span>
+                            {issue.reopenRequest.reason}
+                          </div>
+                          {issue.reopenRequest.photoUrl && (
+                            <div className="border border-[#E5E0D8] rounded-xl overflow-hidden max-h-40 bg-white shadow-2xs animate-fade-in">
+                              <img src={issue.reopenRequest.photoUrl} alt="Reopen photo evidence" className="w-full h-full object-cover" />
+                            </div>
+                          )}
+                          <div className="text-[10px] text-[#7A756D] font-medium pt-1">
+                            Requested by {issue.reopenRequest.requestedBy} on {new Date(issue.reopenRequest.requestedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setIsReopenModalOpen(true)}
+                          className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-[#5A5A40] hover:bg-[#4A4A30] text-white transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                        >
+                          🔄 Report Issue Reopened
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <p className="text-xs text-amber-800 font-semibold italic bg-amber-50/40 p-3.5 rounded-xl border border-amber-100/40 text-center">
+                      No resolution evidence available.
+                    </p>
+                    <div className="border-t border-emerald-500/10 pt-4 mt-2">
+                      {issue.reopenRequest?.status === "pending" ? (
+                        <div className="bg-amber-50/75 border border-amber-200/60 rounded-xl p-4 text-xs text-amber-800 font-medium">
+                          ⚠️ Reopen Request Pending Admin Review
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setIsReopenModalOpen(true)}
+                          className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-[#5A5A40] hover:bg-[#4A4A30] text-white transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                        >
+                          🔄 Report Issue Reopened
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Citizens Truth Verification view */}
+            {(issue.status === "resolved" || issue.status === "reopened") && (
+              <div className="bg-white border border-[#E5E0D8] rounded-2xl p-5 space-y-4 shadow-xs">
+                <div className="flex items-center gap-2 border-b border-[#F5F5F0] pb-2.5">
+                  <Sparkles className="h-4.5 w-4.5 text-[#5A5A40]" />
+                  <div>
+                    <h3 className="text-sm font-extrabold text-[#1A1A1A] tracking-tight">Independent Truth Audit</h3>
+                    <p className="text-[10px] text-[#7A756D] mt-0.5">Autonomous AI auditing of resolution evidence and citizen consensus.</p>
+                  </div>
+                </div>
+
+                {issue.truthAnalysisStatus === "generating" || (truthLoading && !issue.truthAnalysis) ? (
+                  <div className="py-6 flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#5A5A40]" />
+                    <p className="text-xs text-[#7A756D] font-medium animate-pulse text-center">
+                      Truth verification is being generated.
+                    </p>
+                  </div>
+                ) : truthError && !issue.truthAnalysis ? (
+                  <div className="py-4 text-center space-y-2">
+                    <p className="text-xs text-rose-600 font-medium">{truthError || "Truth verification pending."}</p>
+                    <button
+                      type="button"
+                      onClick={handleRefreshTruth}
+                      className="text-xs font-bold text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-3 py-1.5 rounded-lg hover:bg-[#F5F5F0] transition-colors cursor-pointer"
+                    >
+                      Retry Verification
+                    </button>
+                  </div>
+                ) : !issue.truthAnalysis ? (
+                  <div className="py-4 text-center space-y-2.5">
+                    <p className="text-xs text-[#7A756D] italic">
+                      Truth verification has not yet been performed.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleRefreshTruth}
+                      className="text-xs font-bold text-white bg-[#5A5A40] px-4 py-1.5 rounded-lg hover:bg-[#4A4A30] transition-colors cursor-pointer flex items-center gap-1.5 mx-auto"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Run Verification
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    {/* Outdated Cache Alert */}
+                    {issue.truthAnalysis.isOutdated && (
+                      <div className="bg-amber-50 border border-amber-100 text-amber-800 text-xs p-3 rounded-xl flex items-center gap-2 leading-relaxed">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                        <span>Verification may be outdated (changes detected).</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg border ${
+                        issue.truthAnalysis.verificationStatus === "Verified"
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                          : issue.truthAnalysis.verificationStatus === "Likely Verified"
+                          ? "bg-cyan-50 text-cyan-700 border-cyan-100"
+                          : issue.truthAnalysis.verificationStatus === "Needs Review"
+                          ? "bg-amber-50 text-amber-700 border-amber-100"
+                          : "bg-rose-50 text-rose-700 border-rose-100"
+                      }`}>
+                        {issue.truthAnalysis.verificationStatus}
+                      </span>
+                      <span className="text-xs font-mono font-bold text-[#4A4A3A]">
+                        Confidence: {Math.round((issue.truthAnalysis.confidence || 0) * 100)}%
+                      </span>
+                    </div>
+
+                    <p className="text-sm text-[#4A4A3A] leading-relaxed bg-[#FAF9F6] border border-[#E5E0D8] p-4 rounded-xl font-medium font-sans">
+                      {issue.truthAnalysis.verificationSummary}
+                    </p>
+
+                    <div className="flex justify-between items-center text-[10px] text-[#A8A297] border-t border-[#F5F5F0] pt-2.5">
+                      <span>
+                        Audited: {new Date(issue.truthAnalysis.generatedAt).toLocaleDateString("en-IN", {
+                          day: "numeric", month: "short", year: "numeric"
+                        })}
+                      </span>
+                      
+                      {/* Manual Refresh Button for Citizens */}
+                      <button
+                        type="button"
+                        onClick={handleRefreshTruth}
+                        disabled={truthLoading}
+                        className="text-[#5A5A40] hover:text-[#4A4A30] transition-colors flex items-center gap-1 font-bold text-[10px] cursor-pointer disabled:opacity-50"
+                        title="Refresh Verification Analysis"
+                      >
+                        <RotateCw className={`h-3 w-3 ${truthLoading ? "animate-spin" : ""}`} />
+                        Refresh Verification
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* --- COMMUNITY DISCUSSION SYSTEM (COMMENTS) --- */}
@@ -994,32 +1245,64 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
               </div>
             </div>
 
-            <button
-              onClick={handleEndorseClick}
-              disabled={endorsingPending}
-              className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border cursor-pointer ${
-                issue.endorsed
-                  ? "bg-[#FAF9F6] border-[#A37B5C]/40 text-[#A37B5C] hover:bg-[#F5F5F0]"
-                  : "bg-[#5A5A40] hover:bg-[#4A4A30] text-white border-transparent"
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              {endorsingPending ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Registering Signature...</span>
-                </>
-              ) : issue.endorsed ? (
-                <>
-                  <span className="text-emerald-600 font-bold">✓</span>
-                  <span>Endorsed</span>
-                </>
-              ) : (
-                <>
-                  <ThumbsUp className="h-3.5 w-3.5" />
-                  <span>Endorse Report</span>
-                </>
-              )}
-            </button>
+            {issue.status === "resolved" ? (
+              <div className="space-y-2">
+                <button
+                  disabled
+                  className="w-full py-2.5 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border bg-emerald-50 border-emerald-500/20 text-emerald-800 cursor-not-allowed"
+                >
+                  <span className="font-bold">✓</span>
+                  <span>Issue Resolved</span>
+                </button>
+                {issue.reopenRequest?.status === "pending" ? (
+                  <div className="text-center p-2.5 bg-amber-50/60 border border-amber-200/50 rounded-xl text-[11px] font-semibold text-amber-800">
+                    ⚠️ Reopen Request Pending Review
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setIsReopenModalOpen(true)}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-[#5A5A40] hover:bg-[#4A4A30] text-white transition-all flex items-center justify-center gap-2 border border-transparent shadow-xs cursor-pointer"
+                  >
+                    🔄 Report Issue Reopened
+                  </button>
+                )}
+              </div>
+            ) : issue.status === "reopened" ? (
+              <button
+                disabled
+                className="w-full py-2.5 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border bg-[#F5F5F0] border-[#E5E0D8] text-[#5A5A40] cursor-not-allowed"
+              >
+                <span className="font-bold">✓</span>
+                <span>Issue Reopened</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleEndorseClick}
+                disabled={endorsingPending}
+                className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border cursor-pointer ${
+                  issue.endorsed
+                    ? "bg-[#FAF9F6] border-[#A37B5C]/40 text-[#A37B5C] hover:bg-[#F5F5F0]"
+                    : "bg-[#5A5A40] hover:bg-[#4A4A30] text-white border-transparent"
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {endorsingPending ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Registering Signature...</span>
+                  </>
+                ) : issue.endorsed ? (
+                  <>
+                    <span className="text-emerald-600 font-bold">✓</span>
+                    <span>Endorsed</span>
+                  </>
+                ) : (
+                  <>
+                    <ThumbsUp className="h-3.5 w-3.5" />
+                    <span>Endorse Report</span>
+                  </>
+                )}
+              </button>
+            )}
 
             {/* Local Toast/Banner Notification */}
             {localToast && (
@@ -1058,6 +1341,26 @@ export default function IssueDetail({ issueId, scrollToComments, onBack, onViewG
           </button>
         </div>
       )}
+
+      {/* Reopen Request Modal */}
+      <ReopenRequestModal
+        issueId={issueId}
+        isOpen={isReopenModalOpen}
+        onClose={() => setIsReopenModalOpen(false)}
+        onSuccess={(reopenRequest) => {
+          setIssue((prev: any) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              reopenRequest
+            };
+          });
+          setLocalToast({
+            message: "Reopen request submitted successfully for administrator review.",
+            type: "success"
+          });
+        }}
+      />
     </div>
   );
 }

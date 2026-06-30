@@ -6,6 +6,7 @@ import { calculatePriorityScore } from "../utils/priority";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
 import { analyzeCivicIssue } from "../agents/ingestionAgent";
 import { analyzeCommunityContext } from "../agents/communityAgent";
+import { analyzeTruthVerification, isTruthCacheValid } from "../agents/truthEngine";
 import { findDuplicateIssue } from "../services/duplicateService";
 import { canModerateIssue, isGroupMember } from "../services/authService";
 import { generateCivicReportPDF } from "../services/pdfService";
@@ -305,6 +306,19 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
       });
     });
 
+    // Check truth analysis cache validity without automatically regenerating
+    const truthAnalysis = issueData.truthAnalysis || null;
+    let isOutdated = false;
+    if (truthAnalysis && (issueData.status === "resolved" || issueData.status === "reopened")) {
+      try {
+        const commentsSnapshot = await db.collection("issues").doc(issueId).collection("comments").get();
+        const commentCount = commentsSnapshot.size;
+        isOutdated = !isTruthCacheValid(issueData, commentCount);
+      } catch (e) {
+        console.error("Error checking truth analysis cache validity in GET /:id:", e);
+      }
+    }
+
     const clientIssue = {
       ...issueData,
       id: issueDoc.id,
@@ -313,6 +327,11 @@ router.get("/:id", verifyToken, async (req: AuthenticatedRequest, res: Response)
       statusHistory,
       createdAt: createdAtStr,
       updatedAt: updatedAtStr,
+      truthAnalysis: truthAnalysis ? {
+        ...truthAnalysis,
+        isOutdated
+      } : null,
+      truthAnalysisStatus: issueData.truthAnalysisStatus || null,
       dna: issueData.dna ? {
         ...issueData.dna,
         createdAt: dnaCreatedAtStr
@@ -940,7 +959,7 @@ router.patch("/:id", verifyToken, async (req: AuthenticatedRequest, res: Respons
   try {
     const uid = req.user?.uid;
     const issueId = req.params.id;
-    const { status } = req.body;
+    const { status, resolution } = req.body;
 
     if (!uid) {
       res.status(401).json({ success: false, error: "Unauthorized" });
@@ -979,6 +998,24 @@ router.patch("/:id", verifyToken, async (req: AuthenticatedRequest, res: Respons
       updateData.status = status;
     }
 
+    // Store resolution evidence if transitioning to resolved and evidence is provided
+    if (status === "resolved") {
+      updateData.truthAnalysisStatus = "generating";
+      if (resolution) {
+        if (!resolution.afterImageUrl || !resolution.resolutionNote) {
+          res.status(400).json({ success: false, error: "Resolution after-photo and resolution note are required." });
+          return;
+        }
+        updateData.resolution = {
+          resolvedBy: req.user?.name || req.user?.email || "Administrator",
+          resolvedAt: new Date().toISOString(),
+          afterImageUrl: resolution.afterImageUrl,
+          resolutionNote: resolution.resolutionNote,
+          internalNote: resolution.internalNote || ""
+        };
+      }
+    }
+
     // Perform the update
     await db.runTransaction(async (transaction) => {
       transaction.update(issueRef, updateData);
@@ -995,6 +1032,24 @@ router.patch("/:id", verifyToken, async (req: AuthenticatedRequest, res: Respons
         });
       }
     });
+
+    // Asynchronously trigger Truth Engine background generation
+    if (status === "resolved") {
+      (async () => {
+        try {
+          console.log(`[truthEngine] Triggering automatic background truth verification for issue ${issueId}`);
+          await analyzeTruthVerification(issueId, true);
+          console.log(`[truthEngine] Automatic background truth verification completed successfully for issue ${issueId}`);
+        } catch (e) {
+          console.error(`[truthEngine] Automatic background truth verification failed for issue ${issueId}:`, e);
+          try {
+            await issueRef.update({ truthAnalysisStatus: "failed" });
+          } catch (fireErr) {
+            console.error("Failed to update status to failed in Firestore:", fireErr);
+          }
+        }
+      })();
+    }
 
     res.json({
       success: true,
@@ -1115,6 +1170,298 @@ router.get("/:id/export", verifyToken, async (req: AuthenticatedRequest, res: Re
     res.status(500).json({
       success: false,
       error: error.message || "Failed to export PDF report."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/reopen-request
+ * Citizen submits a reopen request for a resolved issue.
+ */
+router.post("/:id/reopen-request", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+    const { reason, photoUrl } = req.body;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    if (!reason || !reason.trim()) {
+      res.status(400).json({ success: false, error: "Reason for reopening is required." });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const issueDoc = await issueRef.get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const issueData = issueDoc.data() || {};
+
+    // Check if user belongs to the group of this issue if it's not awaaz_public
+    if (issueData.groupId && issueData.groupId !== "awaaz_public") {
+      const isMember = await isGroupMember(uid, issueData.groupId);
+      if (!isMember) {
+        res.status(403).json({ success: false, error: "Forbidden: You are not a member of this community group." });
+        return;
+      }
+    }
+
+    if (issueData.status !== "resolved") {
+      res.status(400).json({ success: false, error: "Only resolved issues can be reopened." });
+      return;
+    }
+
+    if (issueData.reopenRequest && issueData.reopenRequest.status === "pending") {
+      res.status(400).json({ success: false, error: "A reopen request is already pending review for this issue." });
+      return;
+    }
+
+    const reopenRequest = {
+      requestedBy: req.user?.name || req.user?.email || "Citizen",
+      requestedById: uid,
+      requestedAt: new Date().toISOString(),
+      reason: reason.trim(),
+      photoUrl: photoUrl || null,
+      status: "pending"
+    };
+
+    await issueRef.update({
+      reopenRequest,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      data: {
+        reopenRequest
+      }
+    });
+  } catch (error: any) {
+    console.error("Error submitting reopen request:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to submit reopen request."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/reopen/approve
+ * Administrator approves a pending reopen request.
+ */
+router.post("/:id/reopen/approve", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const authorized = await canModerateIssue(uid, issueId);
+    if (!authorized) {
+      res.status(403).json({ success: false, error: "Forbidden: You do not have permission to moderate this issue." });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const issueDoc = await issueRef.get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const issueData = issueDoc.data() || {};
+    if (!issueData.reopenRequest || issueData.reopenRequest.status !== "pending") {
+      res.status(400).json({ success: false, error: "No pending reopen request exists for this issue." });
+      return;
+    }
+
+    const oldStatus = issueData.status || "resolved";
+    const currentReopenCount = ((issueData.dna?.reopenCount ?? issueData.reopenCount ?? 0) as number) + 1;
+
+    // Preserve resolution history
+    const resolutions = issueData.resolutions || [];
+    if (issueData.resolution) {
+      resolutions.push({
+        ...issueData.resolution,
+        reopenedAt: new Date().toISOString(),
+        reopenedBy: req.user?.name || "Administrator"
+      });
+    }
+
+    // Recalculate priority score with new reopen count and status
+    const dummyUpdatedIssue = {
+      ...issueData,
+      status: "reopened",
+      reopenCount: currentReopenCount,
+      dna: {
+        ...(issueData.dna || {}),
+        reopenCount: currentReopenCount
+      }
+    };
+    const updatedPriorityScore = calculatePriorityScore(dummyUpdatedIssue);
+
+    const updateData: any = {
+      status: "reopened",
+      reopenCount: currentReopenCount,
+      "dna.reopenCount": currentReopenCount,
+      "dna.lastPriorityUpdate": FieldValue.serverTimestamp(),
+      priorityScore: updatedPriorityScore,
+      "reopenRequest.status": "approved",
+      resolution: null, // clear active resolution evidence visibility
+      resolutions, // store historical resolutions
+      communityAnalysis: null, // Invalidate Community Agent cache
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    await db.runTransaction(async (transaction) => {
+      transaction.update(issueRef, updateData);
+
+      // Record status history
+      const historyRef = issueRef.collection("status_history").doc();
+      transaction.set(historyRef, {
+        fromStatus: oldStatus,
+        toStatus: "reopened",
+        changedBy: req.user?.name || "Administrator",
+        note: `Reopen request approved. Reason: ${issueData.reopenRequest.reason}`,
+        timestamp: FieldValue.serverTimestamp()
+      });
+    });
+
+    // Generate a fresh Community Summary synchronously or asynchronously.
+    try {
+      await analyzeCommunityContext(issueId, true);
+    } catch (caErr) {
+      console.error("Failed to regenerate community analysis after reopen approval:", caErr);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: "reopened",
+        reopenCount: currentReopenCount,
+        priorityScore: updatedPriorityScore
+      }
+    });
+  } catch (error: any) {
+    console.error("Error approving reopen request:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to approve reopen request."
+    });
+  }
+});
+
+/**
+ * POST /api/issues/:id/reopen/reject
+ * Administrator rejects a pending reopen request.
+ */
+router.post("/:id/reopen/reject", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    const authorized = await canModerateIssue(uid, issueId);
+    if (!authorized) {
+      res.status(403).json({ success: false, error: "Forbidden: You do not have permission to moderate this issue." });
+      return;
+    }
+
+    const issueRef = db.collection("issues").doc(issueId);
+    const issueDoc = await issueRef.get();
+    if (!issueDoc.exists) {
+      res.status(404).json({ success: false, error: "Issue not found." });
+      return;
+    }
+
+    const issueData = issueDoc.data() || {};
+    if (!issueData.reopenRequest || issueData.reopenRequest.status !== "pending") {
+      res.status(400).json({ success: false, error: "No pending reopen request exists for this issue." });
+      return;
+    }
+
+    await issueRef.update({
+      "reopenRequest.status": "rejected",
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      success: true,
+      data: {
+        status: issueData.status || "resolved",
+        reopenRequestStatus: "rejected"
+      }
+    });
+  } catch (error: any) {
+    console.error("Error rejecting reopen request:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to reject reopen request."
+    });
+  }
+});
+
+/**
+ * GET /api/issues/:id/truth-analysis
+ * Protected route to get or generate Truth Verification (Admin or Citizen).
+ */
+router.get("/:id/truth-analysis", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  const uid = req.user?.uid;
+  const issueId = req.params.id;
+  const force = req.query.force === "true";
+
+  if (!uid) {
+    res.status(401).json({ success: false, error: "Unauthorized" });
+    return;
+  }
+
+  const issueRef = db.collection("issues").doc(issueId);
+
+  try {
+    await issueRef.update({ truthAnalysisStatus: "generating" });
+
+    const analysis = await analyzeTruthVerification(issueId, force);
+    
+    const commentsSnapshot = await issueRef.collection("comments").get();
+    const commentCount = commentsSnapshot.size;
+    
+    const issueDoc = await issueRef.get();
+    const issueData = issueDoc.data() || {};
+    const isOutdated = analysis ? !isTruthCacheValid(issueData, commentCount) : false;
+
+    res.json({
+      success: true,
+      data: {
+        truthAnalysis: analysis ? {
+          ...analysis,
+          isOutdated
+        } : null,
+        truthAnalysisStatus: "completed"
+      }
+    });
+  } catch (error: any) {
+    console.error("Error retrieving truth analysis:", error);
+    try {
+      await issueRef.update({ truthAnalysisStatus: "failed" });
+    } catch (dbErr) {
+      console.error("Failed to update truthAnalysisStatus to failed:", dbErr);
+    }
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to retrieve truth verification."
     });
   }
 });

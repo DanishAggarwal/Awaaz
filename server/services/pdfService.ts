@@ -279,23 +279,127 @@ export async function generateCivicReportPDF(
         doc.fillColor(darkText).fontSize(10).font("Helvetica-Bold").text("Pending Resolution", 60, resBoxY + 15);
         doc.fillColor(lightText).font("Helvetica").fontSize(8).text("This civic issue is currently in the active operational lifecycle. Standard resolution workflows are pending formal site verification, departmental sign-off, and local citizen auditing.", 60, resBoxY + 28, { width: 475 });
       } else {
-        doc.fillColor(darkText).fontSize(10).font("Helvetica-Bold").text("Resolved [Audit Verification Pending]", 60, resBoxY + 10);
-        doc.fillColor(lightText).font("Helvetica").fontSize(8).text("[Truth Engine Placeholder] - Final resolution validation pending community-led truth verification audit. Citizen-driven inspection protocols, photographic evidence confirmation, and cryptographic ledger verification remain queued.", 60, resBoxY + 22, { width: 475 });
+        if (issueData.resolution) {
+          doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Resolved & Signed Off", 60, resBoxY + 8);
+          
+          const resolvedByStr = issueData.resolution.resolvedBy || "Administrator";
+          const resolvedAtStr = issueData.resolution.resolvedAt 
+            ? new Date(issueData.resolution.resolvedAt).toLocaleDateString("en-IN", {
+                day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+              })
+            : "N/A";
+          
+          doc.fillColor(secondaryColor).fontSize(7.5).font("Helvetica")
+            .text(`Resolved By: ${resolvedByStr}   |   Resolved Date: ${resolvedAtStr}`, 60, resBoxY + 20);
+          
+          doc.fillColor(darkText).fontSize(8).font("Helvetica-Oblique")
+            .text(`Resolution Note: "${issueData.resolution.resolutionNote || 'No resolution note provided.'}"`, 60, resBoxY + 32, { width: 475, height: 24, ellipsis: true });
+        } else {
+          doc.fillColor(darkText).fontSize(10).font("Helvetica-Bold").text("Resolved [Audit Verification Pending]", 60, resBoxY + 10);
+          doc.fillColor(lightText).font("Helvetica").fontSize(8).text("No resolution evidence available. Final resolution validation pending community-led truth verification audit. Citizen-driven inspection protocols, photographic evidence confirmation, and cryptographic ledger verification remain queued.", 60, resBoxY + 22, { width: 475 });
+        }
       }
 
-      // Sign-off signature fields
-      const sigY = 715;
-      doc.moveTo(50, sigY).lineTo(220, sigY).stroke(borderCol);
-      doc.moveTo(375, sigY).lineTo(545, sigY).stroke(borderCol);
+      // If truthAnalysis is present, let's put signatures on Page 3 instead. Otherwise on Page 2.
+      const hasTruth = !!issueData.truthAnalysis;
 
-      doc.fillColor(lightText).fontSize(7).font("Helvetica");
-      doc.text("Municipal Department Audit Officer", 50, sigY + 5, { width: 170, align: "center" });
-      doc.text("Awaaz Civic Network Validator", 375, sigY + 5, { width: 170, align: "center" });
+      if (!hasTruth) {
+        // Sign-off signature fields
+        const sigY = 715;
+        doc.moveTo(50, sigY).lineTo(220, sigY).stroke(borderCol);
+        doc.moveTo(375, sigY).lineTo(545, sigY).stroke(borderCol);
 
-      // FOOTER PAGE 2
-      doc.fillColor(lightText).fontSize(7).font("Helvetica")
-        .text("Awaaz Civic Accountability Platform | Technical Case Audit", 50, 780, { align: "left" })
-        .text("Page 2 of 2", 300, 780, { align: "right" });
+        doc.fillColor(lightText).fontSize(7).font("Helvetica");
+        doc.text("Municipal Department Audit Officer", 50, sigY + 5, { width: 170, align: "center" });
+        doc.text("Awaaz Civic Network Validator", 375, sigY + 5, { width: 170, align: "center" });
+
+        // FOOTER PAGE 2
+        doc.fillColor(lightText).fontSize(7).font("Helvetica")
+          .text("Awaaz Civic Accountability Platform | Technical Case Audit", 50, 780, { align: "left" })
+          .text("Page 2 of 2", 300, 780, { align: "right" });
+      } else {
+        // FOOTER PAGE 2 (without signatures)
+        doc.fillColor(lightText).fontSize(7).font("Helvetica")
+          .text("Awaaz Civic Accountability Platform | Technical Case Audit", 50, 780, { align: "left" })
+          .text("Page 2 of 3", 300, 780, { align: "right" });
+
+        // --- ADD PAGE 3 ---
+        doc.addPage();
+
+        // Header Page 3
+        doc.fillColor(primaryColor).fontSize(20).font("Helvetica-Bold").text("AWAAZ", 50, 50);
+        doc.fillColor(accentColor).fontSize(8).font("Helvetica-Bold").text("CIVIC ACCOUNTABILITY PLATFORM", 50, 72);
+        doc.fillColor(primaryColor).fontSize(14).font("Helvetica-Bold").text("OFFICIAL CIVIC ISSUE REPORT", 300, 50, { align: "right" });
+        doc.fillColor(lightText).fontSize(8).font("Helvetica").text(`Issue ID: ${issueData.id || "N/A"}`, 300, 68, { align: "right" });
+        doc.moveTo(50, 85).lineTo(545, 85).stroke(borderCol);
+
+        // --- SECTION 6: TRUTH ENGINE INDEPENDENT VERIFICATION ---
+        doc.fillColor(primaryColor).fontSize(11).font("Helvetica-Bold").text("6. TRUTH ENGINE INDEPENDENT AUDIT VERIFICATION", 50, 100);
+
+        const ta = issueData.truthAnalysis;
+
+        // Big Status Box
+        const statusBoxY = 120;
+        doc.rect(50, statusBoxY, 495, 60).fillAndStroke(lightBg, borderCol);
+
+        doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Verification Status:", 65, statusBoxY + 15);
+        const statusVal = ta.verificationStatus || "Needs Review";
+        doc.fillColor(accentColor).fontSize(14).font("Helvetica-Bold").text(statusVal.toUpperCase(), 65, statusBoxY + 28);
+
+        doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Verification Confidence:", 300, statusBoxY + 15);
+        const confPct = Math.round((ta.confidence || 0) * 100);
+        doc.fillColor(primaryColor).fontSize(14).font("Helvetica-Bold").text(`${confPct}%`, 300, statusBoxY + 28);
+
+        // Executive Summary
+        const summaryBoxY = 195;
+        doc.rect(50, summaryBoxY, 495, 110).fillAndStroke(lightBg, borderCol);
+
+        doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Truth Audit Executive Summary:", 65, summaryBoxY + 12);
+        doc.fillColor(secondaryColor).font("Helvetica").fontSize(8.5);
+        const truthSummaryText = ta.verificationSummary || "No truth verification summary compiled yet.";
+        doc.text(truthSummaryText, 65, summaryBoxY + 26, { width: 465, height: 75, ellipsis: true });
+
+        // Operational Recommendation
+        const recBoxY = 320;
+        doc.rect(50, recBoxY, 495, 55).fillAndStroke(lightBg, borderCol);
+
+        doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Independent Operational Recommendation:", 65, recBoxY + 10);
+        const recText = ta.recommendation || "Monitor citizen feedback.";
+        doc.fillColor(secondaryColor).font("Helvetica").fontSize(8.5).text(recText, 65, recBoxY + 24, { width: 465 });
+
+        // Visual Assessment & Warnings
+        const detailY = 390;
+        doc.fillColor(darkText).fontSize(9).font("Helvetica-Bold").text("Independent Visual Observations & Warnings:", 50, detailY);
+        
+        doc.fillColor(secondaryColor).font("Helvetica").fontSize(8);
+        doc.text(`• Visual Observation: ${ta.visualAssessment || "No direct physical observations logged."}`, 60, detailY + 15, { width: 480 });
+
+        const concerns = ta.remainingConcerns || [];
+        let concernY = detailY + 30;
+        if (concerns.length > 0) {
+          doc.fillColor(darkText).font("Helvetica-Bold").fontSize(8.5).text("Factual Anomalies / Potential Alerts:", 60, concernY);
+          concernY += 12;
+          doc.fillColor(secondaryColor).font("Helvetica").fontSize(8);
+          concerns.slice(0, 3).forEach((c: string) => {
+            doc.text(`• ${c}`, 70, concernY, { width: 460 });
+            concernY += 12;
+          });
+        }
+
+        // Signatures at bottom of Page 3
+        const sigY = 715;
+        doc.moveTo(50, sigY).lineTo(220, sigY).stroke(borderCol);
+        doc.moveTo(375, sigY).lineTo(545, sigY).stroke(borderCol);
+
+        doc.fillColor(lightText).fontSize(7).font("Helvetica");
+        doc.text("Municipal Department Audit Officer", 50, sigY + 5, { width: 170, align: "center" });
+        doc.text("Awaaz Civic Network Validator", 375, sigY + 5, { width: 170, align: "center" });
+
+        // FOOTER PAGE 3
+        doc.fillColor(lightText).fontSize(7).font("Helvetica")
+          .text("Awaaz Civic Accountability Platform | Technical Case Audit", 50, 780, { align: "left" })
+          .text("Page 3 of 3", 300, 780, { align: "right" });
+      }
 
       doc.end();
     } catch (err) {
