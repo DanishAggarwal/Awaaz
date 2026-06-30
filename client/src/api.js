@@ -139,6 +139,14 @@ export async function getIssue(id) {
 }
 
 /**
+ * Protected: Get or generate Community Analysis for a specific issue.
+ * Matches GET /api/issues/:id/community-analysis
+ */
+export async function getCommunityAnalysis(id, force = false) {
+  return apiRequest(`/issues/${id}/community-analysis${force ? "?force=true" : ""}`);
+}
+
+/**
  * Protected: Get list of issues matching scope and/or groupId.
  * Matches GET /api/issues
  */

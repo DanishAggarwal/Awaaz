@@ -1,5 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { Type } from "@google/genai";
 import { CIVIC_INTAKE_PROMPT } from "../prompts/civicIntakePrompt";
+import { generateWithFallback } from "../services/geminiService";
 
 export interface CivicIntakeInput {
   imageUrl?: string;
@@ -18,26 +19,6 @@ export interface CivicIntakeResult {
   rejectionReason: string | null;
 }
 
-// Lazy initialization of the GoogleGenAI client to prevent crash on startup if key is missing.
-let aiClient: GoogleGenAI | null = null;
-
-function getGeminiClient(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is required to initialize the Ingestion Agent.");
-    }
-    aiClient = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
-  }
-  return aiClient;
-}
 
 /**
  * Downloads a public image URL and converts it to a base64 encoded string.
@@ -77,7 +58,6 @@ export async function analyzeCivicIssue(input: CivicIntakeInput): Promise<CivicI
     throw new Error("A description is required for civic issue ingestion analysis.");
   }
 
-  const ai = getGeminiClient();
   const parts: any[] = [];
 
   // Download and attach image if present
@@ -97,8 +77,7 @@ export async function analyzeCivicIssue(input: CivicIntakeInput): Promise<CivicI
   });
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateWithFallback("ingestion", {
       contents: { parts },
       config: {
         systemInstruction: CIVIC_INTAKE_PROMPT,

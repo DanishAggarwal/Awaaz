@@ -5,6 +5,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { calculatePriorityScore } from "../utils/priority";
 import { COMMUNITY_VERIFICATION_THRESHOLD } from "../config/constants";
 import { analyzeCivicIssue } from "../agents/ingestionAgent";
+import { analyzeCommunityContext } from "../agents/communityAgent";
 import { findDuplicateIssue } from "../services/duplicateService";
 import { canModerateIssue, isGroupMember } from "../services/authService";
 
@@ -1005,6 +1006,46 @@ router.patch("/:id", verifyToken, async (req: AuthenticatedRequest, res: Respons
     res.status(500).json({
       success: false,
       error: error.message || "Failed to update issue status."
+    });
+  }
+});
+
+/**
+ * GET /api/issues/:id/community-analysis
+ * Protected route to get or generate Community Analysis (Admin only).
+ */
+router.get("/:id/community-analysis", verifyToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    const issueId = req.params.id;
+    const force = req.query.force === "true";
+
+    if (!uid) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return;
+    }
+
+    // 1. Check permissions
+    const authorized = await canModerateIssue(uid, issueId);
+    if (!authorized) {
+      res.status(403).json({ success: false, error: "Forbidden: You do not have permission to access community analysis." });
+      return;
+    }
+
+    // 2. Perform or fetch community analysis
+    const analysis = await analyzeCommunityContext(issueId, force);
+
+    res.json({
+      success: true,
+      data: {
+        communityAnalysis: analysis
+      }
+    });
+  } catch (error: any) {
+    console.error("Error retrieving community analysis:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to retrieve community analysis."
     });
   }
 });

@@ -3,7 +3,8 @@ import {
   getIssues, 
   updateIssueStatus, 
   getComments, 
-  createComment 
+  createComment,
+  getCommunityAnalysis
 } from "../../api";
 import { 
   Search, 
@@ -29,7 +30,8 @@ import {
   Sparkles,
   Info,
   CheckCircle,
-  PlayCircle
+  PlayCircle,
+  RotateCw
 } from "lucide-react";
 
 interface Scope {
@@ -65,6 +67,11 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
   const [newCommentText, setNewCommentText] = useState("");
   const [submittingComment, setSubmittingComment] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+
+  // Community Analysis state
+  const [communityAnalysis, setCommunityAnalysis] = useState<any | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Status Change Confirmation Modal
   const [confirmModal, setConfirmModal] = useState<{
@@ -103,6 +110,8 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
     setDrawerOpen(false);
     setSelectedIssueId(null);
     setSelectedIssue(null);
+    setCommunityAnalysis(null);
+    setAnalysisError(null);
   }, [selectedScope]);
 
   // Load issue details & comments when selection changes
@@ -117,6 +126,15 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
         if (matched) {
           setSelectedIssue(matched);
           setActiveImageIndex(0);
+          
+          // Use pre-existing analysis in memory if available, otherwise clear
+          if (matched.communityAnalysis) {
+            setCommunityAnalysis(matched.communityAnalysis);
+          } else {
+            setCommunityAnalysis(null);
+          }
+        } else {
+          setCommunityAnalysis(null);
         }
 
         // Fetch fresh comments
@@ -124,6 +142,32 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
         const commentsRes = await getComments(selectedIssueId);
         if (commentsRes && commentsRes.success && commentsRes.data) {
           setComments(commentsRes.data.comments || []);
+        }
+
+        // Fetch fresh community analysis dynamically
+        setAnalysisLoading(true);
+        setAnalysisError(null);
+        try {
+          const analysisRes = await getCommunityAnalysis(selectedIssueId);
+          if (analysisRes && analysisRes.success && analysisRes.data) {
+            setCommunityAnalysis(analysisRes.data.communityAnalysis);
+            
+            // Sync with local issues list
+            setIssues(prev => prev.map(issue => {
+              if (issue.id === selectedIssueId) {
+                return { ...issue, communityAnalysis: analysisRes.data.communityAnalysis };
+              }
+              return issue;
+            }));
+          }
+        } catch (err: any) {
+          console.error("Error fetching community analysis:", err);
+          // Only show error if we don't have cached communityAnalysis in memory
+          if (!matched || !matched.communityAnalysis) {
+            setAnalysisError(err.message || "Failed to load community analysis.");
+          }
+        } finally {
+          setAnalysisLoading(false);
         }
       } catch (err) {
         console.error("Error loading issue comments:", err);
@@ -135,6 +179,35 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
 
     loadIssueDetails();
   }, [selectedIssueId, issues]);
+
+  // Handle regenerating Community Analysis
+  const handleRegenerateAnalysis = async () => {
+    if (!selectedIssueId || analysisLoading) return;
+
+    try {
+      setAnalysisLoading(true);
+      setAnalysisError(null);
+      const res = await getCommunityAnalysis(selectedIssueId, true); // force=true
+      if (res && res.success && res.data) {
+        setCommunityAnalysis(res.data.communityAnalysis);
+        
+        // Update the issue in the local list so the cache is synced in memory
+        setIssues(prev => prev.map(issue => {
+          if (issue.id === selectedIssueId) {
+            return { ...issue, communityAnalysis: res.data.communityAnalysis };
+          }
+          return issue;
+        }));
+      } else {
+        setAnalysisError(res?.error || "Failed to regenerate community analysis.");
+      }
+    } catch (err: any) {
+      console.error("Error regenerating community analysis:", err);
+      setAnalysisError(err.message || "An unexpected error occurred.");
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
 
   // Handle posting a comment
   const handlePostComment = async (e: React.FormEvent) => {
@@ -743,12 +816,143 @@ export default function IssueManagement({ selectedScope }: IssueManagementProps)
                 </div>
                 
                 {/* Community Summary */}
-                <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[11px] font-bold text-[#4A4A3A]">Community Summary</span>
-                    <span className="text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1.5 py-0.5 rounded-md">Coming in future phase</span>
+                <div className="border border-[#E5E0D8]/40 bg-white rounded-xl p-3.5 space-y-3">
+                  <div className="flex justify-between items-center border-b border-[#E5E0D8]/40 pb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-[#5A5A40]" />
+                      <span className="text-[11px] font-bold text-[#4A4A3A]">Community Summary</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRegenerateAnalysis}
+                      disabled={analysisLoading}
+                      title="Regenerate Community Analysis"
+                      className="p-1 hover:bg-[#FAF9F6] rounded-md transition-colors text-[#5A5A40]/70 hover:text-[#5A5A40] disabled:opacity-40 cursor-pointer"
+                    >
+                      <RotateCw className={`h-2.5 w-2.5 ${analysisLoading ? "animate-spin" : ""}`} />
+                    </button>
                   </div>
-                  <p className="text-[10px] text-[#A8A297] italic">AI agent synthesis of active resident comments and feedback loops.</p>
+
+                  {analysisLoading && !communityAnalysis ? (
+                    <div className="py-4 flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-[#5A5A40]" />
+                      <p className="text-[9px] text-[#A8A297] font-medium animate-pulse text-center">
+                        Community Agent compiling feedback...
+                      </p>
+                    </div>
+                  ) : analysisError ? (
+                    <div className="py-2 text-center space-y-1.5">
+                      <p className="text-[9px] text-rose-600 font-medium">{analysisError}</p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateAnalysis}
+                        className="text-[8px] font-bold text-[#5A5A40] bg-[#FAF9F6] border border-[#E5E0D8] px-2 py-0.5 rounded hover:bg-[#F5F5F0] transition-colors cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : !communityAnalysis ? (
+                    <div className="py-3 text-center space-y-1.5">
+                      <p className="text-[9px] text-[#A8A297] italic">No Community Analysis generated yet for this issue.</p>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateAnalysis}
+                        className="text-[9px] font-bold text-white bg-[#5A5A40] px-3 py-1 rounded-md hover:bg-[#4A4A30] transition-colors cursor-pointer flex items-center gap-1 mx-auto"
+                      >
+                        <Sparkles className="h-2.5 w-2.5" />
+                        Analyze Community Context
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5">
+                      {/* Mood, Escalate, and Confidence Header */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`text-[8px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          communityAnalysis.communityMood === "urgent"
+                            ? "bg-rose-50 text-rose-700 border border-rose-100"
+                            : communityAnalysis.communityMood === "frustrated"
+                            ? "bg-amber-50 text-amber-800 border border-amber-100"
+                            : communityAnalysis.communityMood === "concerned"
+                            ? "bg-blue-50 text-blue-700 border border-blue-100"
+                            : "bg-slate-50 text-slate-600 border border-slate-100"
+                        }`}>
+                          Mood: {communityAnalysis.communityMood}
+                        </span>
+
+                        {communityAnalysis.escalate && (
+                          <span className="text-[8px] font-extrabold uppercase tracking-wider bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded border border-rose-200 animate-pulse">
+                            Escalate Suggested
+                          </span>
+                        )}
+
+                        <span className="ml-auto text-[8px] font-mono font-bold text-[#A8A297] bg-[#F5F5F0] px-1 py-0.5 rounded">
+                          Confidence: {Math.round((communityAnalysis.confidence || 0) * 100)}%
+                        </span>
+                      </div>
+
+                      {/* Brief Paragraph */}
+                      <div>
+                        <h5 className="text-[8px] font-bold uppercase tracking-wider text-[#A8A297] mb-1">Executive Brief</h5>
+                        <p className="text-[10px] text-[#4A4A3A] leading-relaxed bg-[#FAF9F6] p-2.5 rounded-lg border border-[#E5E0D8]/40">
+                          {communityAnalysis.brief}
+                        </p>
+                      </div>
+
+                      {/* Key Insights */}
+                      {communityAnalysis.keyInsights && communityAnalysis.keyInsights.length > 0 && (
+                        <div>
+                          <h5 className="text-[8px] font-bold uppercase tracking-wider text-[#A8A297] mb-1">Key Insights</h5>
+                          <ul className="space-y-1">
+                            {communityAnalysis.keyInsights.map((insight: string, idx: number) => (
+                              <li key={idx} className="flex items-start gap-1 text-[10px] text-[#4A4A3A]">
+                                <ChevronRight className="h-3 w-3 text-[#5A5A40] shrink-0 mt-0.5" />
+                                <span className="leading-tight">{insight}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Possible Factors */}
+                      {communityAnalysis.possibleFactors && communityAnalysis.possibleFactors.length > 0 && (
+                        <div>
+                          <h5 className="text-[8px] font-bold uppercase tracking-wider text-[#A8A297] mb-1">Possible Factors</h5>
+                          <div className="flex flex-wrap gap-1">
+                            {communityAnalysis.possibleFactors.map((factor: string, idx: number) => (
+                              <span key={idx} className="text-[9px] text-[#7A756D] bg-[#FAF9F6] py-0.5 px-2 rounded border border-[#E5E0D8]/20">
+                                {factor}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Urgency Note */}
+                      {communityAnalysis.urgencyNote && (
+                        <div className="bg-amber-50/45 border border-amber-100 rounded-lg p-2.5 text-[9.5px] text-amber-950 leading-normal flex items-start gap-1.5">
+                          <Info className="h-3.5 w-3.5 text-amber-700/80 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-extrabold uppercase tracking-wide text-[8px] block text-amber-800 mb-0.5">Urgency Note</span>
+                            {communityAnalysis.urgencyNote}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Recommended Next Step */}
+                      {communityAnalysis.recommendedNextStep && (
+                        <div className="bg-[#5A5A40]/5 border border-[#5A5A40]/10 rounded-lg p-2.5 text-[10px] text-[#4A4A3A] leading-relaxed">
+                          <span className="font-extrabold uppercase tracking-wider text-[8px] text-[#5A5A40] block mb-0.5">Recommended Next Step (Advisory)</span>
+                          <p className="font-medium">{communityAnalysis.recommendedNextStep}</p>
+                        </div>
+                      )}
+
+                      {/* Metadata stamp */}
+                      <div className="text-[7.5px] font-mono text-[#A8A297] text-right pt-1 flex justify-between items-center border-t border-[#E5E0D8]/10">
+                        <span>Comments: {communityAnalysis.sourceCommentCount ?? 0}</span>
+                        <span>Generated: {new Date(communityAnalysis.generatedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Truth Engine */}
